@@ -1,0 +1,30 @@
+[project]
+name = "launchline-python-tools"
+version = "0.1.0"
+description = "uv-managed Python workspace for Launchline utilities and local data tooling."
+requires-python = ">=3.12"
+dependencies = [
+  "matplotlib>=3.7.0",
+  "numpy>=1.24.0",
+  "pandas>=2.0.0",
+  "scipy>=1.11.0",
+  "PyMuPDF",
+  "pdfplumber",
+  "docling",
+  "easyocr",
+  "polars",
+  "scikit-learn",
+  "markitdown",
+  "llama-parse",
+]
+
+[dependency-groups]
+
+
+[tool.uv]
+package = false
+
+[tool.launchline]
+workspace-root = "."
+python-dir = "scripts"
+requirements-fallback = "scripts/etl/requirements.txt"

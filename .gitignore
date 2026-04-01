@@ -1,0 +1,63 @@
+# Environment files — never commit real credentials
+.env
+.env.local
+.env.*.local
+data/skill-coach-secrets.json
+
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+out/
+
+# Python virtual environment
+scripts/.venv/
+scripts/.venv-meta.json
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Local planning / private checklists
+docs/checklists/
+
+# Local app state and runtime artifacts
+data/electron-runtime/
+data/nav-state.json
+data/*.db
+.launchline-*.json
+.repo-readiness-*.json
+.appcraft-*.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local planning / quality tracking
+docs/checklists/
+
+# Local app state and generated runtime artifacts
+build/
+data/electron-runtime/
+data/nav-state.json
+data/*.db
+.launchline-*.json
+.repo-readiness-*.json
+.appcraft-*.json
+scripts/.venv-meta.json
+
+# Common local/editor noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+scripts/etl/.venv-meta.json
+scripts/etl/pipeline_history.json
+scripts/etl/pipeline_log.json

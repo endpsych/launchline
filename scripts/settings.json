@@ -1,0 +1,495 @@
+{
+  "company": {
+    "name": "Launchline",
+    "namePrimary": "Launch",
+    "nameAccent": "line",
+    "industry": "Developer Productivity",
+    "initials": "LL",
+    "showIcon": true,
+    "showName": true
+  },
+  "operations": {
+    "country": "United States",
+    "currency": "$",
+    "timezone": "UTC",
+    "regions": [
+      "Default Workspace"
+    ],
+    "language": "en"
+  },
+  "data": {
+    "rawPath": "data/"
+  },
+  "legal": {
+    "frameworks": [],
+    "customLinks": []
+  },
+  "integrations": {
+    "groq": "",
+    "openai": "",
+    "gemini": ""
+  },
+  "ui": {
+    "theme": "system",
+    "density": "comfortable",
+    "reduceMotion": false,
+    "compactSidebar": false
+  },
+  "notifications": {
+    "desktop": true,
+    "sounds": false,
+    "digest": "daily"
+  },
+  "privacy": {
+    "telemetry": false,
+    "crashReports": true,
+    "diagnosticsRetentionDays": 30
+  },
+  "behavior": {
+    "openLastWorkspace": true,
+    "autoSaveMinutes": 5,
+    "confirmDestructiveActions": true
+  },
+  "development": {
+    "primaryUsers": "Product teams, designers, and builders",
+    "releaseTheme": "Readiness workspace",
+    "successSignal": "Developers can inspect local setup and production posture from one focused desktop app",
+    "vision": "Launchline is a focused Electron desktop app for Python environment management and production-readiness scanning.",
+    "roadmapTracks": [
+      {
+        "id": "shell",
+        "title": "Shell & Navigation",
+        "description": "Core layout, navigation model, titlebar, settings, and workspace structure.",
+        "status": "complete",
+        "nextCheckpoint": "Keep template shell stable while new apps are cloned from it"
+      },
+      {
+        "id": "elements",
+        "title": "UI Element Library",
+        "description": "Showcase pages, reusable primitives, and composed interface patterns.",
+        "status": "in_progress",
+        "nextCheckpoint": "Document approved components and strengthen reuse guidance"
+      },
+      {
+        "id": "docs",
+        "title": "Documentation & Cloning Workflow",
+        "description": "Instructions for developers and AI tools to reuse the template safely.",
+        "status": "planned",
+        "nextCheckpoint": "Create a reusable reference guide and new-app checklist"
+      },
+      {
+        "id": "ai",
+        "title": "AI-Assisted Workflows",
+        "description": "Plan how future apps can add AI search, copilots, summaries, or automations.",
+        "status": "planned",
+        "nextCheckpoint": "Define which AI capabilities should be core versus optional"
+      }
+    ],
+    "deliveryChecklist": [
+      {
+        "id": "branding",
+        "title": "Branding updated",
+        "description": "App name, initials, and shell labels match the intended product.",
+        "checked": true
+      },
+      {
+        "id": "settings",
+        "title": "Generic settings starter ready",
+        "description": "The cloned app has a baseline settings surface to extend.",
+        "checked": true
+      },
+      {
+        "id": "pages",
+        "title": "Core workflows identified",
+        "description": "The first set of real product pages is defined before implementation starts.",
+        "checked": false
+      },
+      {
+        "id": "docs",
+        "title": "Template guidance documented",
+        "description": "Developers and AI tools know how to reuse the UI library.",
+        "checked": false
+      },
+      {
+        "id": "release",
+        "title": "Packaging and QA pass defined",
+        "description": "The app has a release checklist before shipping to users.",
+        "checked": false
+      }
+    ],
+    "aiFeatures": [
+      {
+        "id": "assistant",
+        "title": "Embedded assistant panel",
+        "description": "Context-aware helper for guidance, Q&A, and task support inside the app.",
+        "enabled": true,
+        "priority": "Planned",
+        "note": "Best for high-context internal apps"
+      },
+      {
+        "id": "search",
+        "title": "Semantic search",
+        "description": "Natural-language retrieval across records, docs, or internal entities.",
+        "enabled": true,
+        "priority": "Core",
+        "note": "Strong candidate for apps with large data surfaces"
+      },
+      {
+        "id": "summaries",
+        "title": "Auto summaries",
+        "description": "Generate concise recaps for records, dashboards, or activity history.",
+        "enabled": true,
+        "priority": "Evaluate",
+        "note": "Useful when dense detail views need quick scanning"
+      },
+      {
+        "id": "automation",
+        "title": "Agentic actions",
+        "description": "Allow AI to trigger workflows, complete drafts, or suggest next steps.",
+        "enabled": false,
+        "priority": "Later",
+        "note": "Add only when permissions and safety are clear"
+      }
+    ],
+    "notes": "Use this page as the project brief for apps created from the template. Keep decisions, scope, and AI plans visible here so future contributors stay aligned."
+  },
+  "pythonTools": {
+    "manager": "uv",
+    "pythonVersion": "3.12",
+    "projectEnvironment": "scripts/.venv",
+    "interpreterPath": "scripts/.venv/Scripts/python.exe",
+    "defaultRunCommand": "uv run",
+    "syncOnLaunch": true,
+    "installDevDependencies": true,
+    "enableTaskRunner": true,
+    "allowAiPackages": true,
+    "catalogEntries": [],
+    "catalogOverrides": {},
+    "pagePythonOverrides": {},
+    "selectedEnvironmentId": "primary",
+    "environmentRegistry": [
+      {
+        "id": "primary",
+        "title": "Primary app environment",
+        "kind": "primary",
+        "manifestPath": "pyproject.toml",
+        "venvPath": "scripts/.venv",
+        "pythonVersion": "3.12",
+        "purpose": "Shared default environment for core Launchline workflows.",
+        "assignedPackages": []
+      }
+    ],
+    "roadmap": [
+      {
+        "id": "environment",
+        "title": "Environment & Runtime",
+        "description": "Keep uv, Python versioning, interpreter paths, and the project virtual environment visible and reproducible.",
+        "status": "in_progress"
+      },
+      {
+        "id": "dependencies",
+        "title": "Dependencies & Capability Packs",
+        "description": "Organize reusable Python packages into pyproject.toml groups that cloned apps can enable as needed.",
+        "status": "in_progress"
+      },
+      {
+        "id": "tasks",
+        "title": "Scripts & Tasks",
+        "description": "Expose standard uv run tasks so apps can launch processing, automation, and diagnostics from one surface.",
+        "status": "planned"
+      },
+      {
+        "id": "ai",
+        "title": "AI Tooling",
+        "description": "Plan which AI-oriented Python stacks are optional, supported, or intentionally excluded from a cloned app.",
+        "status": "planned"
+      },
+      {
+        "id": "logs",
+        "title": "Execution Logs",
+        "description": "Add reusable logs, run history, and health feedback once live execution is wired in.",
+        "status": "later"
+      }
+    ],
+    "capabilityPacks": [
+      {
+        "id": "data",
+        "title": "Data & Processing",
+        "group": "data",
+        "enabled": true,
+        "packages": "polars",
+        "description": "Structured file ingestion, cleaning, and transformation utilities for common app workflows."
+      },
+      {
+        "id": "automation",
+        "title": "Automation",
+        "group": "automation",
+        "enabled": true,
+        "packages": "faker",
+        "description": "Reliable background workflows, API clients, and reusable task automation helpers."
+      },
+      {
+        "id": "ai",
+        "title": "AI Assistant",
+        "group": "ai",
+        "enabled": false,
+        "packages": "openai, instructor, tiktoken",
+        "description": "Optional LLM client stack for apps that need assistants, structured extraction, or summarization."
+      },
+      {
+        "id": "documents",
+        "title": "Document Processing",
+        "group": "documents",
+        "enabled": false,
+        "packages": "pypdf, python-docx, beautifulsoup4",
+        "description": "Document parsing and content extraction helpers for record-heavy or review-heavy apps."
+      },
+      {
+        "id": "ml",
+        "title": "Analysis & ML",
+        "group": "ml",
+        "enabled": false,
+        "packages": "seaborn, statsmodels, scikit-learn, shap, xgboost",
+        "description": "Heavier analytics and modeling dependencies best kept optional in cloned apps."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "sync-deps",
+        "title": "Sync Environment",
+        "command": "uv sync",
+        "status": "core",
+        "description": "Bring the local project environment into alignment with pyproject.toml and lock state."
+      },
+      {
+        "id": "run-assistant-evals",
+        "title": "Generate Seed Data",
+        "command": "uv run python scripts/etl/generate_data.py",
+        "status": "planned",
+        "description": "Generate local sample data sets when a cloned app wants seeded records or fixtures."
+      }
+    ],
+    "aiIntegrations": [
+      {
+        "id": "openai",
+        "title": "OpenAI client stack",
+        "enabled": false,
+        "note": "Use for assistants, structured extraction, or semantic features when the cloned app needs hosted AI."
+      },
+      {
+        "id": "embeddings",
+        "title": "Embeddings & retrieval",
+        "enabled": false,
+        "note": "Useful for semantic search, recommendations, or contextual assistants over internal records."
+      },
+      {
+        "id": "local-nlp",
+        "title": "Local NLP utilities",
+        "enabled": false,
+        "note": "Use when the app needs offline parsing, entity extraction, or language heuristics without hosted models."
+      }
+    ],
+    "secretChecklist": [
+      {
+        "id": "no-storage",
+        "title": "Keep secrets out of Launchline settings and roadmap notes",
+        "description": "Store API keys and passwords in environment variables or an external secret manager, never in the template UI state.",
+        "checked": true
+      },
+      {
+        "id": "gitignore",
+        "title": "Ignore local env files in git",
+        "description": "Make sure .env and .env.local are excluded before sharing or cloning the app.",
+        "checked": true
+      },
+      {
+        "id": "separate-envs",
+        "title": "Use separate credentials for local, staging, and production",
+        "description": "Avoid reusing one key across environments so cloned apps stay safer to test.",
+        "checked": true
+      },
+      {
+        "id": "rotation",
+        "title": "Review rotation and expiration before release",
+        "description": "Add a release step that rotates test keys and confirms production owners before shipping.",
+        "checked": false
+      }
+    ],
+    "secretPolicies": {
+      "redactLogs": true,
+      "preferLocalEnvFiles": true,
+      "separateCredentialsByEnvironment": true,
+      "requireReleaseSecretReview": true
+    },
+    "runtimeSnapshot": {
+      "python": {
+        "installed": true,
+        "version": "Python 3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+        "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "defaultRuntime": {
+          "label": "-V:3.14[-64]",
+          "version": "3.14.3",
+          "build": "(tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+          "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+          "source": "py launcher",
+          "isDefault": true,
+          "ok": true,
+          "error": null
+        },
+        "availableRuntimes": {
+          "checkedAt": "2026-04-01T19:24:59.281Z",
+          "count": 2,
+          "preview": [
+            "Python 3.14.3",
+            "Python 3.13.12"
+          ],
+          "defaultRuntime": {
+            "label": "-V:3.14[-64]",
+            "version": "3.14.3",
+            "build": "(tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+            "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+            "source": "py launcher",
+            "isDefault": true,
+            "ok": true,
+            "error": null
+          },
+          "runtimes": [
+            {
+              "label": "-V:3.14[-64]",
+              "version": "3.14.3",
+              "build": "(tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+              "source": "py launcher",
+              "isDefault": true,
+              "ok": true,
+              "error": null
+            },
+            {
+              "label": "-V:Astral\\CPython3.13.12",
+              "version": "3.13.12",
+              "build": "(main, Mar 24 2026, 22:56:40) [MSC v.1944 64 bit (AMD64)]",
+              "path": "C:\\Users\\ender\\AppData\\Roaming\\uv\\python\\cpython-3.13.12-windows-x86_64-none\\python.exe",
+              "source": "py launcher",
+              "isDefault": false,
+              "ok": true,
+              "error": null
+            }
+          ]
+        },
+        "checkedAt": "2026-04-01T19:24:59.730Z",
+        "error": null
+      },
+      "paths": {
+        "projectRoot": "C:\\Users\\ender\\Documents\\GitHub\\launchline",
+        "scriptsDir": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts",
+        "venvDir": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\.venv",
+        "interpreterPath": null,
+        "requirementsPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\requirements.txt",
+        "pyprojectPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\pyproject.toml",
+        "uvLockPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\uv.lock"
+      },
+      "files": {
+        "hasVenv": false,
+        "hasRequirements": true,
+        "hasPyproject": true,
+        "hasUvLock": true
+      },
+      "dependencySummary": {
+        "requirementsCount": 10,
+        "packages": [
+          "pandas>=2.0.0",
+          "numpy>=1.24.0",
+          "scipy>=1.11.0",
+          "scikit-learn>=1.3.0",
+          "statsmodels>=0.14.0",
+          "matplotlib>=3.7.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "polars>=0.20.0",
+          "shap>=0.44.0",
+          "matplotlib>=3.7.0",
+          "numpy>=1.24.0",
+          "pandas>=2.0.0",
+          "scipy>=1.11.0",
+          "PyMuPDF",
+          "pdfplumber",
+          "docling",
+          "easyocr",
+          "polars",
+          "scikit-learn",
+          "markitdown",
+          "llama-parse"
+        ],
+        "requirementsPackages": [
+          "pandas>=2.0.0",
+          "numpy>=1.24.0",
+          "scipy>=1.11.0",
+          "scikit-learn>=1.3.0",
+          "statsmodels>=0.14.0",
+          "matplotlib>=3.7.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "polars>=0.20.0",
+          "shap>=0.44.0"
+        ],
+        "pyprojectPackages": [
+          "matplotlib>=3.7.0",
+          "numpy>=1.24.0",
+          "pandas>=2.0.0",
+          "scipy>=1.11.0",
+          "PyMuPDF",
+          "pdfplumber",
+          "docling",
+          "easyocr",
+          "polars",
+          "scikit-learn",
+          "markitdown",
+          "llama-parse"
+        ],
+        "pyprojectGroups": {},
+        "constraintSummary": {
+          "pinned": 0,
+          "ranged": 14,
+          "unconstrained": 8
+        },
+        "onlyInRequirements": [
+          "statsmodels>=0.14.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "shap>=0.44.0"
+        ],
+        "onlyInPyproject": [
+          "PyMuPDF",
+          "pdfplumber",
+          "docling",
+          "easyocr",
+          "markitdown",
+          "llama-parse"
+        ]
+      },
+      "manager": {
+        "installed": false,
+        "version": null,
+        "path": null,
+        "error": "spawn uv ENOENT"
+      }
+    },
+    "notes": "Keep Python Tools focused on reusable app capabilities. Prefer uv-managed environments, a root pyproject.toml with grouped dependencies, and task definitions that cloned apps can keep or remove with minimal friction."
+  },
+  "rotationReminders": {},
+  "workAnalysis": {
+    "tasks": [],
+    "processes": [],
+    "automationDesigns": [],
+    "context": {
+      "role": "",
+      "organization": "",
+      "systems": []
+    }
+  },
+  "dataAnalysis": {
+    "datasets": [],
+    "selectedDatasetId": null,
+    "analysisDatasetId": null
+  }
+}

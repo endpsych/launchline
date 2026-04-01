@@ -1,0 +1,878 @@
+{
+  "company": {
+    "name": "Launchline",
+    "namePrimary": "App",
+    "nameAccent": "Craft",
+    "industry": "Generic",
+    "initials": "",
+    "showIcon": false,
+    "showName": false
+  },
+  "operations": {
+    "country": "Spain",
+    "currency": "€",
+    "timezone": "Europe/Madrid",
+    "regions": [
+      "Madrid",
+      "Barcelona",
+      "Valencia",
+      "Sevilla",
+      "Bilbao",
+      "Valladolid"
+    ],
+    "language": "en"
+  },
+  "data": {
+    "rawPath": "data/raw/",
+    "dbName": "endflow.db"
+  },
+  "legal": {
+    "frameworks": [
+      "GDPR",
+      "LOPD",
+      "ePrivacy"
+    ],
+    "customLinks": []
+  },
+  "integrations": {
+    "groq": "",
+    "openai": "",
+    "gemini": "",
+    "yolo": ""
+  },
+  "ui": {
+    "theme": "system",
+    "density": "comfortable",
+    "reduceMotion": false,
+    "compactSidebar": false
+  },
+  "notifications": {
+    "desktop": true,
+    "sounds": false,
+    "digest": "daily"
+  },
+  "privacy": {
+    "telemetry": false,
+    "crashReports": true,
+    "diagnosticsRetentionDays": 30
+  },
+  "behavior": {
+    "openLastWorkspace": true,
+    "autoSaveMinutes": 5,
+    "confirmDestructiveActions": true
+  },
+  "development": {
+    "primaryUsers": "Product teams, designers, and builders",
+    "releaseTheme": "Template foundation",
+    "successSignal": "New apps can be cloned and extended quickly",
+    "vision": "Launchline is a standalone Electron desktop app for Python tooling and production-readiness workflows.",
+    "roadmapTracks": [
+      {
+        "id": "shell",
+        "title": "Shell & Navigation",
+        "description": "Core layout, navigation model, titlebar, settings, and workspace structure.",
+        "status": "complete",
+        "nextCheckpoint": "Keep template shell stable while new apps are cloned from it"
+      },
+      {
+        "id": "elements",
+        "title": "UI Element Library",
+        "description": "Showcase pages, reusable primitives, and composed interface patterns.",
+        "status": "in_progress",
+        "nextCheckpoint": "Document approved components and strengthen reuse guidance"
+      },
+      {
+        "id": "docs",
+        "title": "Documentation & Cloning Workflow",
+        "description": "Instructions for developers and AI tools to reuse the template safely.",
+        "status": "planned",
+        "nextCheckpoint": "Create a reusable reference guide and new-app checklist"
+      },
+      {
+        "id": "ai",
+        "title": "AI-Assisted Workflows",
+        "description": "Plan how future apps can add AI search, copilots, summaries, or automations.",
+        "status": "planned",
+        "nextCheckpoint": "Define which AI capabilities should be core versus optional"
+      }
+    ],
+    "deliveryChecklist": [
+      {
+        "id": "branding",
+        "title": "Branding updated",
+        "description": "App name, initials, and shell labels match the intended product.",
+        "checked": true
+      },
+      {
+        "id": "settings",
+        "title": "Generic settings starter ready",
+        "description": "The cloned app has a baseline settings surface to extend.",
+        "checked": true
+      },
+      {
+        "id": "pages",
+        "title": "Core workflows identified",
+        "description": "The first set of real product pages is defined before implementation starts.",
+        "checked": false
+      },
+      {
+        "id": "docs",
+        "title": "Template guidance documented",
+        "description": "Developers and AI tools know how to reuse the UI library.",
+        "checked": false
+      },
+      {
+        "id": "release",
+        "title": "Packaging and QA pass defined",
+        "description": "The app has a release checklist before shipping to users.",
+        "checked": false
+      }
+    ],
+    "aiFeatures": [
+      {
+        "id": "assistant",
+        "title": "Embedded assistant panel",
+        "description": "Context-aware helper for guidance, Q&A, and task support inside the app.",
+        "enabled": true,
+        "priority": "Planned",
+        "note": "Best for high-context internal apps"
+      },
+      {
+        "id": "search",
+        "title": "Semantic search",
+        "description": "Natural-language retrieval across records, docs, or internal entities.",
+        "enabled": true,
+        "priority": "Core",
+        "note": "Strong candidate for apps with large data surfaces"
+      },
+      {
+        "id": "summaries",
+        "title": "Auto summaries",
+        "description": "Generate concise recaps for records, dashboards, or activity history.",
+        "enabled": true,
+        "priority": "Evaluate",
+        "note": "Useful when dense detail views need quick scanning"
+      },
+      {
+        "id": "automation",
+        "title": "Agentic actions",
+        "description": "Allow AI to trigger workflows, complete drafts, or suggest next steps.",
+        "enabled": false,
+        "priority": "Later",
+        "note": "Add only when permissions and safety are clear"
+      }
+    ],
+    "notes": "Use this page as the project brief for apps created from the template. Keep decisions, scope, and AI plans visible here so future contributors stay aligned."
+  },
+  "pythonTools": {
+    "manager": "uv",
+    "pythonVersion": "3.12",
+    "projectEnvironment": "etl/.venv",
+    "interpreterPath": "etl/.venv/Scripts/python.exe",
+    "defaultRunCommand": "uv run",
+    "syncOnLaunch": true,
+    "installDevDependencies": true,
+    "enableTaskRunner": true,
+    "allowAiPackages": true,
+    "roadmap": [
+      {
+        "id": "environment",
+        "title": "Environment & Runtime",
+        "description": "Keep uv, Python versioning, interpreter paths, and the project virtual environment visible and reproducible.",
+        "status": "in_progress"
+      },
+      {
+        "id": "dependencies",
+        "title": "Dependencies & Capability Packs",
+        "description": "Organize reusable Python packages into pyproject.toml groups that cloned apps can enable as needed.",
+        "status": "in_progress"
+      },
+      {
+        "id": "tasks",
+        "title": "Scripts & Tasks",
+        "description": "Expose standard uv run tasks so apps can launch processing, automation, and diagnostics from one surface.",
+        "status": "planned"
+      },
+      {
+        "id": "ai",
+        "title": "AI Tooling",
+        "description": "Plan which AI-oriented Python stacks are optional, supported, or intentionally excluded from a cloned app.",
+        "status": "planned"
+      },
+      {
+        "id": "logs",
+        "title": "Execution Logs",
+        "description": "Add reusable logs, run history, and health feedback once live execution is wired in.",
+        "status": "later"
+      }
+    ],
+    "capabilityPacks": [
+      {
+        "id": "data",
+        "title": "Data & Processing",
+        "group": "data",
+        "enabled": true,
+        "packages": "polars",
+        "description": "Structured file ingestion, cleaning, and transformation utilities for common app workflows."
+      },
+      {
+        "id": "automation",
+        "title": "Automation",
+        "group": "automation",
+        "enabled": true,
+        "packages": "faker",
+        "description": "Reliable background workflows, API clients, and reusable task automation helpers."
+      },
+      {
+        "id": "ai",
+        "title": "AI Assistant",
+        "group": "ai",
+        "enabled": false,
+        "packages": "openai, instructor, tiktoken",
+        "description": "Optional LLM client stack for apps that need assistants, structured extraction, or summarization."
+      },
+      {
+        "id": "documents",
+        "title": "Document Processing",
+        "group": "documents",
+        "enabled": false,
+        "packages": "pypdf, python-docx, beautifulsoup4",
+        "description": "Document parsing and content extraction helpers for record-heavy or review-heavy apps."
+      },
+      {
+        "id": "ml",
+        "title": "Analysis & ML",
+        "group": "ml",
+        "enabled": false,
+        "packages": "seaborn, statsmodels, scikit-learn, shap, xgboost",
+        "description": "Heavier analytics and modeling dependencies best kept optional in cloned apps."
+      }
+    ],
+    "tasks": [
+      {
+        "id": "profile-data",
+        "title": "Profile Dataset",
+        "command": "uv run python etl/datasets.py catalog data/endflow.db data/raw pipeline_log.json",
+        "status": "ready",
+        "description": "Inspect the local dataset catalog and validate that Python-side data tooling is reachable."
+      },
+      {
+        "id": "sync-deps",
+        "title": "Sync Environment",
+        "command": "uv sync",
+        "status": "core",
+        "description": "Bring the local project environment into alignment with pyproject.toml and lock state."
+      },
+      {
+        "id": "run-assistant-evals",
+        "title": "Generate Seed Data",
+        "command": "uv run python etl/generate_data.py",
+        "status": "planned",
+        "description": "Generate local sample data sets when a cloned app wants seeded records or fixtures."
+      }
+    ],
+    "aiIntegrations": [
+      {
+        "id": "openai",
+        "title": "OpenAI client stack",
+        "enabled": false,
+        "note": "Use for assistants, structured extraction, or semantic features when the cloned app needs hosted AI."
+      },
+      {
+        "id": "embeddings",
+        "title": "Embeddings & retrieval",
+        "enabled": false,
+        "note": "Useful for semantic search, recommendations, or contextual assistants over internal records."
+      },
+      {
+        "id": "local-nlp",
+        "title": "Local NLP utilities",
+        "enabled": false,
+        "note": "Use when the app needs offline parsing, entity extraction, or language heuristics without hosted models."
+      }
+    ],
+    "secretChecklist": [
+      {
+        "id": "no-storage",
+        "title": "Keep secrets out of Launchline settings and roadmap notes",
+        "description": "Store API keys and passwords in environment variables or an external secret manager, never in the template UI state.",
+        "checked": true
+      },
+      {
+        "id": "gitignore",
+        "title": "Ignore local env files in git",
+        "description": "Make sure .env and .env.local are excluded before sharing or cloning the app.",
+        "checked": true
+      },
+      {
+        "id": "separate-envs",
+        "title": "Use separate credentials for local, staging, and production",
+        "description": "Avoid reusing one key across environments so cloned apps stay safer to test.",
+        "checked": true
+      },
+      {
+        "id": "rotation",
+        "title": "Review rotation and expiration before release",
+        "description": "Add a release step that rotates test keys and confirms production owners before shipping.",
+        "checked": false
+      }
+    ],
+    "secretPolicies": {
+      "redactLogs": true,
+      "preferLocalEnvFiles": true,
+      "separateCredentialsByEnvironment": true,
+      "requireReleaseSecretReview": true
+    },
+    "runtimeSnapshot": {
+      "ok": true,
+      "manager": {
+        "installed": true,
+        "version": "uv 0.10.10 (8c730aaad 2026-03-13)",
+        "path": "C:\\Users\\ender\\.local\\bin\\uv.exe",
+        "error": null,
+        "update": {
+          "checked": true,
+          "canSelfUpdate": true,
+          "supported": true,
+          "upToDate": null,
+          "latestVersion": null,
+          "message": "info: Checking for updates...\nYou're on the latest version of uv (v0.10.10)"
+        }
+      },
+      "python": {
+        "installed": true,
+        "version": "Python 3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+        "error": null,
+        "availableRuntimes": {
+          "checkedAt": "2026-03-15T04:36:28.834Z",
+          "count": 2,
+          "preview": [
+            "Python 3.14.2",
+            "Python 3.12.10"
+          ],
+          "defaultRuntime": {
+            "label": "-V:3.14[-64]",
+            "version": "3.14.2",
+            "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+            "source": "py launcher",
+            "isDefault": true,
+            "ok": true,
+            "error": null,
+            "build": "(tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]"
+          },
+          "runtimes": [
+            {
+              "label": "-V:3.14[-64]",
+              "version": "3.14.2",
+              "build": "(tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+              "source": "py launcher",
+              "isDefault": true,
+              "ok": true,
+              "error": null
+            },
+            {
+              "label": "-V:3.12[-64]",
+              "version": "3.12.10",
+              "build": "(tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.12-64\\python.exe",
+              "source": "py launcher",
+              "isDefault": false,
+              "ok": true,
+              "error": null
+            }
+          ]
+        },
+        "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "defaultRuntime": {
+          "label": "-V:3.14[-64]",
+          "version": "3.14.2",
+          "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+          "source": "py launcher",
+          "isDefault": true,
+          "ok": true,
+          "error": null,
+          "build": "(tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]"
+        },
+        "checkedAt": "2026-03-15T04:36:29.202Z"
+      },
+      "paths": {
+        "projectRoot": "C:\\Users\\ender\\Documents\\GitHub\\launchline",
+        "etlDir": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl",
+        "venvDir": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\.venv",
+        "interpreterPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\.venv\\Scripts\\python.exe",
+        "requirementsPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\requirements.txt",
+        "pyprojectPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\pyproject.toml",
+        "uvLockPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\uv.lock"
+      },
+      "files": {
+        "hasVenv": true,
+        "hasRequirements": true,
+        "hasPyproject": true,
+        "hasUvLock": true
+      },
+      "dependencySummary": {
+        "requirementsCount": 10,
+        "packages": [
+          "pandas>=2.0.0",
+          "numpy>=1.24.0",
+          "scipy>=1.11.0",
+          "scikit-learn>=1.3.0",
+          "statsmodels>=0.14.0",
+          "matplotlib>=3.7.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "polars>=0.20.0",
+          "shap>=0.44.0",
+          "matplotlib>=3.7.0",
+          "numpy>=1.24.0",
+          "pandas>=2.0.0",
+          "scipy>=1.11.0"
+        ],
+        "requirementsPackages": [
+          "pandas>=2.0.0",
+          "numpy>=1.24.0",
+          "scipy>=1.11.0",
+          "scikit-learn>=1.3.0",
+          "statsmodels>=0.14.0",
+          "matplotlib>=3.7.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "polars>=0.20.0",
+          "shap>=0.44.0"
+        ],
+        "pyprojectPackages": [
+          "matplotlib>=3.7.0",
+          "numpy>=1.24.0",
+          "pandas>=2.0.0",
+          "scipy>=1.11.0"
+        ],
+        "pyprojectGroups": {},
+        "constraintSummary": {
+          "pinned": 0,
+          "ranged": 14,
+          "unconstrained": 0
+        },
+        "onlyInRequirements": [
+          "scikit-learn>=1.3.0",
+          "statsmodels>=0.14.0",
+          "seaborn>=0.12.0",
+          "xgboost>=2.0.0",
+          "polars>=0.20.0",
+          "shap>=0.44.0"
+        ],
+        "onlyInPyproject": []
+      },
+      "venv": {
+        "detected": true,
+          "location": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\.venv",
+          "interpreterPath": "C:\\Users\\ender\\Documents\\GitHub\\launchline\\scripts\\etl\\.venv\\Scripts\\python.exe",
+        "error": null,
+        "interpreterVersion": "Python 3.14.2",
+        "packageCount": 32,
+        "lastUpdated": "2026-03-14T22:22:43.943Z",
+        "sizeBytes": 893381307,
+        "syncStatus": "Aligned with requirements.txt + pyproject.toml",
+        "packagePreview": [
+          "cloudpickle",
+          "colorama",
+          "contourpy",
+          "cycler",
+          "fonttools",
+          "joblib"
+        ],
+        "lastChecked": "2026-03-15T04:36:30.394Z",
+        "healthWarnings": [],
+        "creationMethod": "uv:3.14.2",
+        "lockfileStatus": "uv.lock present",
+        "availableRuntimes": {
+          "checkedAt": "2026-03-14T16:08:26.282Z",
+          "count": 3,
+          "preview": [
+            "Python 3.14.2",
+            "Python 3.12.10",
+            "Python 3.14.2"
+          ],
+          "defaultRuntime": {
+            "label": "-V:3.14[-64]",
+            "version": "3.14.2",
+            "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+            "source": "py launcher",
+            "isDefault": true,
+            "ok": true,
+            "error": null
+          },
+          "runtimes": [
+            {
+              "label": "-V:3.14[-64]",
+              "version": "3.14.2",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+              "source": "py launcher",
+              "isDefault": true,
+              "ok": true,
+              "error": null
+            },
+            {
+              "label": "-V:3.12[-64]",
+              "version": "3.12.10",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Python\\pythoncore-3.12-64\\python.exe",
+              "source": "py launcher",
+              "isDefault": false,
+              "ok": true,
+              "error": null
+            },
+            {
+              "label": "Default python",
+              "version": "3.14.2",
+              "path": "C:\\Users\\ender\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+              "source": "default command",
+              "isDefault": false,
+              "ok": true,
+              "error": null
+            }
+          ]
+        },
+        "packages": [
+          {
+            "name": "cloudpickle",
+            "version": "3.1.2",
+            "sizeBytes": 68424,
+            "summary": "Pickler class to extend the standard pickle.Pickler functionality",
+            "homepage": "https://github.com/cloudpipe/cloudpickle",
+            "requiresPython": ">=3.8",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "colorama",
+            "version": "0.4.6",
+            "sizeBytes": 76301,
+            "summary": "Cross-platform colored terminal text.",
+            "homepage": "https://github.com/tartley/colorama",
+            "requiresPython": "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "contourpy",
+            "version": "1.3.3",
+            "sizeBytes": 602413,
+            "summary": "Python library for calculating contours of 2D quadrilateral grids",
+            "homepage": "https://github.com/contourpy/contourpy",
+            "requiresPython": ">=3.11",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "cycler",
+            "version": "0.12.1",
+            "sizeBytes": 22088,
+            "summary": "Composable style cycles",
+            "homepage": "https://matplotlib.org/cycler/",
+            "requiresPython": ">=3.8",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "fonttools",
+            "version": "4.62.1",
+            "sizeBytes": 11417928,
+            "summary": "Tools to manipulate font files",
+            "homepage": "http://github.com/fonttools/fonttools",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "joblib",
+            "version": "1.5.3",
+            "sizeBytes": 918837,
+            "summary": "Lightweight pipelining with Python functions",
+            "homepage": "https://joblib.readthedocs.io",
+            "requiresPython": ">=3.9",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "kiwisolver",
+            "version": "1.5.0",
+            "sizeBytes": 180675,
+            "summary": "A fast implementation of the Cassowary constraint solver",
+            "homepage": "https://github.com/nucleic/kiwi",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "llvmlite",
+            "version": "0.46.0",
+            "sizeBytes": 107752280,
+            "summary": "lightweight wrapper around basic LLVM functionality",
+            "homepage": "http://llvmlite.readthedocs.io",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "matplotlib",
+            "version": "3.10.8",
+            "sizeBytes": 20268059,
+            "summary": "Python plotting package",
+            "homepage": "https://matplotlib.org",
+            "requiresPython": ">=3.10",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "numba",
+            "version": "0.64.0",
+            "sizeBytes": 11880838,
+            "summary": "compiling Python code using LLVM",
+            "homepage": "https://numba.pydata.org",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "numpy",
+            "version": "2.4.3",
+            "sizeBytes": 41075915,
+            "summary": "Fundamental package for array computing in Python",
+            "homepage": "https://numpy.org",
+            "requiresPython": ">=3.11",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "packaging",
+            "version": "26.0",
+            "sizeBytes": 274978,
+            "summary": "Core utilities for Python packages",
+            "homepage": "https://github.com/pypa/packaging",
+            "requiresPython": ">=3.8",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "pandas",
+            "version": "3.0.1",
+            "sizeBytes": 35573742,
+            "summary": "Powerful data structures for data analysis, time series, and statistics",
+            "homepage": "https://pandas.pydata.org",
+            "requiresPython": ">=3.11",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "patsy",
+            "version": "1.0.2",
+            "sizeBytes": 749054,
+            "summary": "A Python package for describing statistical models and for building design matrices.",
+            "homepage": "https://github.com/pydata/patsy",
+            "requiresPython": ">=3.6",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "pillow",
+            "version": "12.1.1",
+            "sizeBytes": 14589479,
+            "summary": "Python Imaging Library (fork)",
+            "homepage": "https://python-pillow.github.io",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "pip",
+            "version": "26.0.1",
+            "sizeBytes": 5760987,
+            "summary": "The PyPA recommended tool for installing Python packages.",
+            "homepage": "https://pip.pypa.io/",
+            "requiresPython": ">=3.9",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "polars",
+            "version": "1.39.0",
+            "sizeBytes": 4054173,
+            "summary": "Blazingly fast DataFrame library",
+            "homepage": "https://www.pola.rs/",
+            "requiresPython": ">=3.10",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "polars-runtime-32",
+            "version": "1.39.0",
+            "sizeBytes": 165368795,
+            "summary": "Blazingly fast DataFrame library",
+            "homepage": "https://www.pola.rs/",
+            "requiresPython": ">=3.10",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "pyparsing",
+            "version": "3.3.2",
+            "sizeBytes": 462144,
+            "summary": "pyparsing - Classes and methods to define and execute parsing grammars",
+            "homepage": "https://github.com/pyparsing/pyparsing/",
+            "requiresPython": ">=3.9",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "python-dateutil",
+            "version": "2.9.0.post0",
+            "sizeBytes": 439503,
+            "summary": "Extensions to the standard Python datetime module",
+            "homepage": "https://github.com/dateutil/dateutil",
+            "requiresPython": "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "scikit-learn",
+            "version": "1.8.0",
+            "sizeBytes": 26564283,
+            "summary": "A set of python modules for machine learning and data mining",
+            "homepage": "https://scikit-learn.org",
+            "requiresPython": ">=3.11",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "scipy",
+            "version": "1.17.1",
+            "sizeBytes": 110165873,
+            "summary": "Fundamental algorithms for scientific computing in Python",
+            "homepage": "https://scipy.org/",
+            "requiresPython": ">=3.11",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "seaborn",
+            "version": "0.13.2",
+            "sizeBytes": 1037998,
+            "summary": "Statistical data visualization",
+            "homepage": "https://github.com/mwaskom/seaborn",
+            "requiresPython": ">=3.8",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "shap",
+            "version": "0.51.0",
+            "sizeBytes": 1980328,
+            "summary": "A unified approach to explain the output of any machine learning model.",
+            "homepage": "http://github.com/shap/shap",
+            "requiresPython": ">=3.11",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "six",
+            "version": "1.17.0",
+            "sizeBytes": 37544,
+            "summary": "Python 2 and 3 compatibility utilities",
+            "homepage": "https://github.com/benjaminp/six",
+            "requiresPython": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "slicer",
+            "version": "0.0.8",
+            "sizeBytes": 52039,
+            "summary": "A small package for big slicing.",
+            "homepage": "https://github.com/interpretml/slicer",
+            "requiresPython": ">=3.6",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "statsmodels",
+            "version": "0.14.6",
+            "sizeBytes": 31643756,
+            "summary": "Statistical computations and models for Python",
+            "homepage": "https://www.statsmodels.org/",
+            "requiresPython": ">=3.9",
+            "direct": true,
+            "latestVersion": null
+          },
+          {
+            "name": "threadpoolctl",
+            "version": "3.6.0",
+            "sizeBytes": 66158,
+            "summary": "threadpoolctl",
+            "homepage": "https://github.com/joblib/threadpoolctl",
+            "requiresPython": ">=3.9",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "tqdm",
+            "version": "4.67.3",
+            "sizeBytes": 330817,
+            "summary": "Fast, Extensible Progress Meter",
+            "homepage": "https://tqdm.github.io",
+            "requiresPython": ">=3.7",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "typing-extensions",
+            "version": "4.15.0",
+            "sizeBytes": 177710,
+            "summary": "Backported and Experimental Type Hints for Python 3.9+",
+            "homepage": "https://github.com/python/typing_extensions",
+            "requiresPython": ">=3.9",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "tzdata",
+            "version": "2025.3",
+            "sizeBytes": 529735,
+            "summary": "Provider of IANA time zone data",
+            "homepage": "https://github.com/python/tzdata",
+            "requiresPython": ">=2",
+            "direct": false,
+            "latestVersion": null
+          },
+          {
+            "name": "xgboost",
+            "version": "3.2.0",
+            "sizeBytes": 144402110,
+            "summary": "XGBoost Python Package",
+            "homepage": "https://github.com/dmlc/xgboost",
+            "requiresPython": ">=3.10",
+            "direct": true,
+            "latestVersion": null
+          }
+        ],
+        "lockfile": {
+          "present": true,
+          "mtime": "2026-03-14T14:19:51.386Z",
+          "stale": false,
+          "packageCount": 37,
+          "notInstalledCount": 4,
+          "extraInEnvCount": 1,
+          "notInstalledPackages": [
+        "launchline-python-tools",
+            "faker",
+            "nvidia-nccl-cu12",
+            "setuptools"
+          ],
+          "extraPackages": [
+            "pip"
+          ]
+        }
+      }
+    },
+    "notes": "Keep Python Tools focused on reusable app capabilities. Prefer uv-managed environments, a root pyproject.toml with grouped dependencies, and task definitions that cloned apps can keep or remove with minimal friction."
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "launchline",
+  "version": "0.1.0",
+  "description": "Standalone desktop app for Python tooling and production readiness",
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": "20.x",
+    "npm": "10.x"
+  },
+  "main": "src/main.js",
+  "scripts": {
+    "prestart": "node scripts/check-runtime.cjs",
+    "prebuild": "node scripts/check-runtime.cjs",
+    "start": "concurrently \"npm run react\" \"wait-on http://localhost:3001 && electron .\"",
+    "react": "set \"PORT=3001\" && react-scripts start",
+    "build": "react-scripts build && electron-builder",
+    "electron": "electron .",
+    "dev": "rmdir /s /q node_modules\\.cache 2>nul & npm start",
+    "test": "node tests/settingsSchema.test.cjs && node tests/jsonStorage.test.cjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.263.1",
+    "neo4j-driver": "^6.0.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^10.4.1",
+    "recharts": "^2.12.0",
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^29.0.0",
+    "electron-builder": "^24.9.1",
+    "react-scripts": "5.0.1",
+    "wait-on": "^7.2.0"
+  },
+  "homepage": ".",
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
+  },
+  "build": {
+    "appId": "com.launchline",
+    "productName": "Launchline",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "build/**/*",
+      "src/main.js",
+      "src/preload.js",
+      "src/shared/**/*",
+      "src/services/**/*",
+      "scripts/**/*",
+      "pyproject.toml",
+      "uv.lock",
+      "data/**/*",
+      ".env.example",
+      ".gitignore"
+    ]
+  }
+}

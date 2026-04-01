@@ -1,0 +1,92 @@
+[
+  {
+    "title": "Newsletter Opt-Out Sync Failure",
+    "description": "Customers who opt-out on the website are still receiving emails for up to 48 hours because the dim_customers PII flag isn't triggering the marketing API immediately.",
+    "status": "open",
+    "priority": "medium",
+    "stakeholder": "Sofia Conti",
+    "id": "ISS-3972",
+    "created_at": "2026-03-10T13:23:53.567Z",
+    "answered_at": null
+  },
+  {
+    "title": "Loyalty Program Attribution Gap",
+    "description": "Points earned via the mobile app are not correctly linking to the web-based profile ID. Approximately 12% of users are seeing incorrect point balances.",
+    "status": "in_progress",
+    "priority": "medium",
+    "stakeholder": "Beatriz Garrido",
+    "id": "ISS-9627",
+    "created_at": "2026-03-10T13:23:26.058Z",
+    "answered_at": null
+  },
+  {
+    "title": "Warehouse Stock Out-of-Sync",
+    "description": "The dim_inventory table is only updating every 24 hours. Needs to be moved to a 4-hour micro-batch to prevent marketplace overselling.",
+    "status": "open",
+    "priority": "medium",
+    "stakeholder": "Marc Volkov",
+    "id": "ISS-9435",
+    "created_at": "2026-03-10T13:22:40.664Z",
+    "answered_at": null
+  },
+  {
+    "title": "Last-Mile Delivery Latency (Barcelona)",
+    "description": "API latency in the carrier tracking dataset is causing a 4-hour delay in \"Package Delivered\" status updates. This is inflating the customer friction score.",
+    "status": "open",
+    "priority": "high",
+    "stakeholder": "Sofia Conti",
+    "id": "ISS-1709",
+    "created_at": "2026-03-10T13:22:21.112Z",
+    "answered_at": null
+  },
+  {
+    "title": "Tax Compliance Export for LOPD",
+    "description": "Need a dedicated view for the legal team to export anonymized transaction data for the Spanish Tax Agency.",
+    "status": "open",
+    "priority": "medium",
+    "stakeholder": "Arantxa Urquiza",
+    "id": "ISS-3218",
+    "created_at": "2026-03-10T13:21:38.810Z",
+    "answered_at": null
+  },
+  {
+    "title": "Q4 Revenue Reconciliation Delay",
+    "description": "Discrepancy between Stripe transaction logs and the local fact_sales table. Current pipeline doesn't account for mid-month currency fluctuations in the Madrid region.",
+    "status": "in_progress",
+    "priority": "high",
+    "stakeholder": "Raul Sanz-López",
+    "id": "ISS-1305",
+    "created_at": "2026-03-10T13:20:54.867Z",
+    "answered_at": null
+  },
+  {
+    "id": "ISS-001",
+    "title": "What is driving the revenue gap vs. plan in Q4?",
+    "stakeholder": "Finance",
+    "priority": "high",
+    "status": "resolved",
+    "description": "Revenue is tracking below the annual plan. Need to identify which categories and regions are underperforming.",
+    "created_at": "2026-03-01T18:52:29.840Z",
+    "answered_at": null
+  },
+  {
+    "id": "ISS-002",
+    "title": "Which customer segments have the highest return rate?",
+    "stakeholder": "Commercial",
+    "priority": "medium",
+    "status": "open",
+    "description": "Returns are up YoY. Need segment-level breakdown to decide whether to tighten return policy for specific categories.",
+    "created_at": "2026-03-01T18:52:29.842Z",
+    "answered_at": null
+  },
+  {
+    "id": "ISS-003",
+    "title": "Is the marketplace channel profitable after fulfillment costs?",
+    "stakeholder": "Operations",
+    "priority": "medium",
+    "status": "in_progress",
+    "description": "Marketplace revenue is growing but fulfillment costs are unclear. Need to model net margin per channel.",
+    "created_at": "2026-03-01T18:52:29.842Z",
+    "answered_at": null
+  }
+]
