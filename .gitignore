@@ -29,8 +29,11 @@ data/electron-runtime/
 data/nav-state.json
 data/*.db
 .launchline-*.json
-.repo-readiness-*.json
 .appcraft-*.json
+scripts/.venv-meta.json
+scripts/etl/.venv-meta.json
+scripts/etl/pipeline_history.json
+scripts/etl/pipeline_log.json
 
 # Editor / OS noise
 .vscode/
@@ -38,26 +41,4 @@ data/*.db
 .DS_Store
 Thumbs.db
 
-# Local planning / quality tracking
-docs/checklists/
-
-# Local app state and generated runtime artifacts
-build/
-data/electron-runtime/
-data/nav-state.json
-data/*.db
-.launchline-*.json
-.repo-readiness-*.json
-.appcraft-*.json
-scripts/.venv-meta.json
-
-# Common local/editor noise
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-
-scripts/etl/.venv-meta.json
-scripts/etl/pipeline_history.json
-scripts/etl/pipeline_log.json
+docs/

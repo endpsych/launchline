@@ -13,6 +13,7 @@ import ModelRegistryTab from './production/ModelRegistryTab';
 import DisasterRecoveryTab from './production/DisasterRecoveryTab';
 import AuditLoggingTab from './production/AuditLoggingTab';
 import AccessControlTab from './production/AccessControlTab';
+import WorkspaceBanner from '../components/WorkspaceBanner';
 
 // ─── Placeholder tab ─────────────────────────────────────────────────────────
 
@@ -202,9 +203,21 @@ const TABS = [
 
 export default function ProductionPage() {
   const [activeTab, setActiveTab] = useState('secrets');
+  const activeTabLabel = TABS.find((tab) => tab.id === activeTab)?.label || 'Production';
+  const activeTabDescription = activeTab === 'secrets'
+    ? 'Secrets is the strongest production workflow right now and operates directly against the selected workspace.'
+    : `${activeTabLabel} inspects the selected workspace for production-readiness signals. These checks are useful already, but still earlier-stage than the Secrets workflow.`;
 
   return (
     <div style={{ padding: '24px 28px', height: '100%', overflowY: 'auto' }}>
+      <WorkspaceBanner
+        label="Production Analysis"
+        title={`${activeTabLabel} checks`}
+        description={activeTabDescription}
+        dense
+        showActions={false}
+        style={{ marginBottom: 16 }}
+      />
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'secrets'          && <SecretsPage embedded />}

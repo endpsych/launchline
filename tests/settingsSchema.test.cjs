@@ -11,31 +11,18 @@ const {
 test('normalizeSettings applies current schema version and Launchline branding migration', () => {
   const legacy = {
     company: {
-      name: 'Repo Readiness',
-      namePrimary: 'Repo',
-      nameAccent: ' Readiness',
-      initials: 'RR',
+      name: 'AppCraft',
       industry: 'Generic Product',
     },
     data: {
       rawPath: 'data/',
-      dbName: 'repo-readiness.db',
-    },
-    development: {
-      vision: 'Repo Readiness is a focused Electron desktop app for Python environment management and production-readiness scanning.',
+      dbName: 'launchline.db',
     },
     pythonTools: {
       tasks: [
         {
           id: 'profile-data',
-          command: 'uv run python scripts/etl/datasets.py catalog data/repo-readiness.db data/raw pipeline_log.json',
-        },
-      ],
-      secretChecklist: [
-        {
-          id: 'no-storage',
-          title: 'Keep secrets out of Repo Readiness settings and roadmap notes',
-          checked: true,
+          command: 'uv run python scripts/etl/datasets.py catalog data/launchline.db data/raw pipeline_log.json',
         },
       ],
     },
@@ -50,12 +37,8 @@ test('normalizeSettings applies current schema version and Launchline branding m
   assert.equal(normalized.company.initials, 'LL');
   assert.equal(normalized.company.industry, 'Developer Productivity');
   assert.equal(normalized.data.dbName, undefined);
-  assert.equal(normalized.development.vision, SETTINGS_DEFAULT.development.vision);
   assert.equal(normalized.pythonTools.tasks.some((task) => task.id === 'profile-data'), false);
-  assert.equal(
-    normalized.pythonTools.secretChecklist.some((item) => item.title.includes('Repo Readiness')),
-    false,
-  );
+  assert.equal(normalized.development.vision, SETTINGS_DEFAULT.development.vision);
 });
 
 test('deepMerge preserves defaults while allowing nested overrides', () => {

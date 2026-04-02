@@ -5,7 +5,7 @@ const repoRoot = path.join(__dirname, '..');
 const nvmrcPath = path.join(repoRoot, '.nvmrc');
 const expectedVersion = fs.existsSync(nvmrcPath)
   ? fs.readFileSync(nvmrcPath, 'utf8').trim()
-  : '20.18.1';
+  : '24.14.1';
 
 const actualVersion = process.versions.node || '';
 const expectedMajor = expectedVersion.split('.')[0];

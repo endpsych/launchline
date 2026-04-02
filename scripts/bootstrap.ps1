@@ -9,7 +9,7 @@ $nvmrcPath = Join-Path $repoRoot '.nvmrc'
 $nodeVersion = if (Test-Path $nvmrcPath) {
   (Get-Content $nvmrcPath -Raw).Trim()
 } else {
-  '20.18.1'
+  '24.14.1'
 }
 
 $env:NVM_HOME = if ($env:NVM_HOME) { $env:NVM_HOME } else { [Environment]::GetEnvironmentVariable('NVM_HOME', 'User') }
@@ -72,11 +72,11 @@ $npmCmd = Resolve-CommandPath -Names @('npm.cmd', 'npm') -PreferredPaths @(
 )
 
 if (-not $nodeExe) {
-  throw 'Node was not found after running nvm. Install Node 20.x or fix your NVM_SYMLINK configuration.'
+  throw 'Node was not found after running nvm. Install Node 24.x or fix your NVM_SYMLINK configuration.'
 }
 
 if (-not $npmCmd) {
-  throw 'npm was not found after running nvm. Install Node 20.x or fix your NVM_SYMLINK configuration.'
+  throw 'npm was not found after running nvm. Install Node 24.x or fix your NVM_SYMLINK configuration.'
 }
 
 Set-Location $repoRoot

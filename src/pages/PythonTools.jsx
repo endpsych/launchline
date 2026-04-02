@@ -8,6 +8,7 @@ import { Section, inputStyle } from '../ui-kit/forms/SettingsLayout';
 import { PYTHON_PACKAGE_CATALOG, PYTHON_PACKAGE_CATEGORIES, PYTHON_TECHNICAL_PROPERTY_CATEGORIES } from '../ui-showcase/data/pythonPackageCatalog';
 import TabBar from '../components/TabBar';
 import Modal from '../components/Modal';
+import WorkspaceBanner from '../components/WorkspaceBanner';
 
 const pageWrapStyle = {
   display: 'flex',
@@ -852,6 +853,13 @@ export default function PythonTools() {
     }),
     [packageCatalog, pythonTools.runtimeSnapshot, runtime.data]
   );
+  const workspaceProjectDetected = !!projectConfig.data?.exists || !!runtime.data?.files?.hasPyproject;
+  const workspacePythonSignalsDetected = !!runtime.data?.files?.hasPyproject || !!runtime.data?.files?.hasRequirements || !!runtime.data?.files?.hasVenv;
+  const workspacePythonDescription = workspaceProjectDetected
+    ? 'Launchline found a Python project manifest in the active workspace and can audit its declared environment directly.'
+    : workspacePythonSignalsDetected
+      ? 'The active workspace has Python signals, but no pyproject.toml manifest yet. Python Tools can still help you inspect and prepare the environment.'
+      : 'The active workspace does not currently look like a Python project. Python Tools stays available so you can prepare a Python environment if this workspace grows into one.';
   const filteredPackageCatalog = useMemo(() => {
     const query = packageSearch.trim().toLowerCase();
     return packageCatalog.filter((pkg) => {
@@ -2950,7 +2958,8 @@ export default function PythonTools() {
       ? `"${runtimeData.venv.location}\\Scripts\\activate.bat"`
       : 'Not available';
     const pyprojectDocsUrl = 'https://packaging.python.org/en/latest/specifications/pyproject-toml/';
-    const projectDetected = !!projectConfig.data || !!runtimeData.files?.hasPyproject;
+      const projectDetected = !!projectConfig.data?.exists || !!runtimeData.files?.hasPyproject;
+      const pythonSignalsDetected = !!runtimeData.files?.hasPyproject || !!runtimeData.files?.hasRequirements || !!runtimeData.files?.hasVenv;
     const projectLocationLabel = runtimeData.paths?.pyprojectPath || 'Not available';
     const projectData = projectConfig.data;
     const projectNameLabel = projectData?.metadata?.name || 'Not available';
@@ -2976,6 +2985,11 @@ export default function PythonTools() {
     const depOnlyInProj = depSummary.onlyInPyproject || [];
     const depBothSources = depReqPackages.length > 0 && depProjPackages.length > 0;
     const depInSync = depBothSources && depOnlyInReq.length === 0 && depOnlyInProj.length === 0;
+    const workspacePythonDescription = projectDetected
+      ? 'Launchline found a Python project manifest in the active workspace and can audit its declared environment directly.'
+      : pythonSignalsDetected
+        ? 'The active workspace has Python signals, but no pyproject.toml manifest yet. Python Tools can still help you inspect and prepare the environment.'
+        : 'The active workspace does not currently look like a Python project. Python Tools stays available so you can prepare a Python environment if this workspace grows into one.';
     const strategySummaryAppearance = getRecommendationAppearance(workspaceVenvStrategy.highestSeverityWorkload?.outcome || 'use_primary_venv');
     const selectedEnvironmentAssignedPackages = Array.isArray(selectedEnvironmentManifest?.assignedPackages)
       ? selectedEnvironmentManifest.assignedPackages
@@ -4463,7 +4477,7 @@ export default function PythonTools() {
                     <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
                       <HoverInfoLabel label="Status" description="Whether a project configuration file is present and readable." />
                       <div style={{ fontSize: 14, fontWeight: 800, color: projectDetected ? '#4ade80' : '#f59e0b' }}>
-                        {projectDetected ? 'Detected' : 'Not checked'}
+                        {projectDetected ? 'Detected' : pythonSignalsDetected ? 'No pyproject.toml' : 'No Python signals'}
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
@@ -5793,6 +5807,15 @@ export default function PythonTools() {
           edgeBleedX={28}
           edgeBleedTop={0}
           stickyTop={0}
+        />
+      </div>
+      <div style={{ padding: '16px 28px 0', flexShrink: 0 }}>
+        <WorkspaceBanner
+          label="Python Workspace"
+          title={workspaceProjectDetected ? 'Python project detected' : workspacePythonSignalsDetected ? 'Python signals detected' : 'No Python project detected yet'}
+          description={workspacePythonDescription}
+          dense
+          showActions={false}
         />
       </div>
       <div className="custom-scrollbar" style={pageContentStyle}>

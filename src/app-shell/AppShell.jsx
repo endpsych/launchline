@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Copy, Database, Download, FolderOpen, Minus, RotateCcw, Square, Upload, X } from 'lucide-react';
+import { ArrowRightCircle, ChevronLeft, ChevronRight, Copy, Database, Download, FolderOpen, Minus, RotateCcw, Square, Upload, X } from 'lucide-react';
 import '../styles/theme.css';
 import { useSettings } from '../hooks/useSettings';
 import Modal from '../components/Modal';
@@ -87,7 +87,7 @@ function timeAgoShort(ts) {
   return new Date(ts).toLocaleDateString();
 }
 
-function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage }) {
+function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage, workspaceKey, workspaceLabel }) {
   const [status, setStatus] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const savedAtRef = useRef(null);
@@ -103,7 +103,7 @@ function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage }
     load();
     const id = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [workspaceKey]);
 
   useEffect(() => {
     if (!savedAt || savedAt === savedAtRef.current) return;
@@ -121,7 +121,11 @@ function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage }
   let venvLabel = '…';
   let venvTooltip = 'Checking Python environment…';
   if (venv) {
-    if (!venv.exists) {
+    if (venv.projectDetected === false) {
+      dotColor = 'rgba(148,163,184,0.85)';
+      venvLabel = 'No Python signals';
+      venvTooltip = `${venv.workspaceName || 'This workspace'} does not currently expose pyproject.toml, requirements.txt, or .venv signals. Python Tools is still available if you want to prepare a Python environment.`;
+    } else if (!venv.exists) {
       dotColor = '#f87171';
       venvLabel = 'No venv';
       venvTooltip = 'No virtual environment found. Go to Python Tools to create one.';
@@ -182,10 +186,27 @@ function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage }
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
         <span
           style={{ color: 'var(--text-secondary)' }}
-          title={`Currently viewing: ${activeLabel}`}
+          title={`Currently viewing: ${activeLabel}${workspaceLabel ? ` · active workspace ${workspaceLabel}` : ''}`}
         >
           {activeLabel}
         </span>
+        {workspaceLabel ? (
+          <>
+            <span style={{ color: 'var(--text-muted)' }}>·</span>
+            <span
+              style={{
+                color: 'var(--text-muted)',
+                maxWidth: 180,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+              title={`Active workspace: ${workspaceLabel}`}
+            >
+              {workspaceLabel}
+            </span>
+          </>
+        ) : null}
       </div>
 
       {/* RIGHT — last run + version */}
@@ -281,6 +302,371 @@ function StoragePathCard({ label, pathValue, onReveal, helper }) {
   );
 }
 
+function WorkspaceNamePill({ name, tone = 'green' }) {
+  const palette = tone === 'purple'
+    ? {
+        color: '#c4b5fd',
+        background: 'rgba(139,92,246,0.12)',
+        border: '1px solid rgba(139,92,246,0.24)',
+      }
+    : tone === 'blue'
+      ? {
+          color: '#93c5fd',
+          background: 'rgba(59,130,246,0.12)',
+          border: '1px solid rgba(59,130,246,0.24)',
+        }
+      : {
+          color: '#86efac',
+          background: 'rgba(34,197,94,0.12)',
+          border: '1px solid rgba(34,197,94,0.24)',
+        };
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '4px 10px',
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 800,
+        letterSpacing: '0.04em',
+        color: palette.color,
+        background: palette.background,
+        border: palette.border,
+        whiteSpace: 'nowrap',
+      }}
+      title={name}
+    >
+      {name}
+    </span>
+  );
+}
+
+const revealWorkspaceButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 34,
+  height: 32,
+  background: 'transparent',
+  border: '1px solid var(--border)',
+  color: 'var(--text-secondary)',
+  borderRadius: 8,
+  cursor: 'pointer',
+  fontSize: 12,
+  flexShrink: 0,
+};
+
+const workspaceActionGapPx = 10;
+const workspaceRevealButtonWidthPx = 34;
+const workspaceUseButtonWidthPx = 34;
+const workspaceActionsColumnWidthPx = workspaceRevealButtonWidthPx + workspaceActionGapPx + workspaceUseButtonWidthPx;
+
+const useWorkspaceButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: workspaceUseButtonWidthPx,
+  height: 32,
+  boxSizing: 'border-box',
+  gap: 6,
+  background: 'rgba(52,211,153,0.12)',
+  border: '1px solid rgba(52,211,153,0.24)',
+  color: '#86efac',
+  borderRadius: 8,
+  padding: 0,
+  cursor: 'pointer',
+  fontSize: 12,
+  lineHeight: 0,
+  flexShrink: 0,
+};
+
+const workspaceModalColumns = `220px 150px minmax(0, 1fr) ${workspaceActionsColumnWidthPx}px`;
+
+function formatWorkspaceLoadedAt(value) {
+  if (!value) return '--';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '--';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const hours = String(parsed.getHours()).padStart(2, '0');
+  const minutes = String(parsed.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function WorkspaceTableRow({ workspace, onReveal, isActive, onActivate, showPlaceholderAction = false, highlightLoaded = false, nameTone = 'green' }) {
+  const isMissing = workspace?.exists === false;
+  const loadedToneColor = '#86efac';
+
+  if (!workspace) return null;
+
+  const displayName = workspace.isInternal ? 'Launchline' : workspace.name;
+  const displayTone = workspace.isInternal ? 'purple' : nameTone;
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: workspaceModalColumns,
+        gap: 12,
+        padding: '12px 14px',
+        alignItems: 'center',
+        width: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        style={{
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifySelf: 'start',
+        }}
+      >
+          <WorkspaceNamePill name={displayName} tone={displayTone} />
+        </div>
+      <span
+        style={{
+          fontSize: 12,
+          color: highlightLoaded ? loadedToneColor : 'var(--text-secondary)',
+          fontFamily: 'var(--font-mono)',
+          whiteSpace: 'nowrap',
+        }}
+        title={workspace.loadedAt ? new Date(workspace.loadedAt).toLocaleString() : 'No load time recorded yet'}
+      >
+        {formatWorkspaceLoadedAt(workspace.loadedAt)}
+      </span>
+      <span
+        style={{
+          minWidth: 0,
+          display: 'block',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 12,
+          color: highlightLoaded ? loadedToneColor : 'var(--text-secondary)',
+        }}
+        title={workspace.path}
+      >
+        {workspace.path}
+      </span>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `${workspaceRevealButtonWidthPx}px ${workspaceUseButtonWidthPx}px`,
+          alignItems: 'center',
+          justifyItems: 'start',
+          gap: workspaceActionGapPx,
+          flexShrink: 0,
+          width: workspaceActionsColumnWidthPx,
+          justifySelf: 'end',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => onReveal?.(workspace.path)}
+          title="Open workspace in File Explorer"
+          aria-label="Open workspace in File Explorer"
+          style={{
+            ...revealWorkspaceButtonStyle,
+            border: highlightLoaded ? '1px solid rgba(52,211,153,0.35)' : revealWorkspaceButtonStyle.border,
+            color: highlightLoaded ? loadedToneColor : revealWorkspaceButtonStyle.color,
+            background: highlightLoaded ? 'rgba(6,95,70,0.18)' : revealWorkspaceButtonStyle.background,
+          }}
+        >
+          <FolderOpen size={14} />
+        </button>
+        {!isActive ? (
+          <button
+            type="button"
+            onClick={() => onActivate?.(workspace)}
+            disabled={isMissing}
+            title="Use this workspace as the active target"
+            aria-label="Use this workspace as the active target"
+            style={{
+              ...useWorkspaceButtonStyle,
+              background: isMissing ? 'rgba(255,255,255,0.03)' : useWorkspaceButtonStyle.background,
+              border: `1px solid ${isMissing ? 'var(--border)' : 'rgba(52,211,153,0.24)'}`,
+              color: isMissing ? 'var(--text-muted)' : '#86efac',
+              cursor: isMissing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <ArrowRightCircle size={15} />
+          </button>
+        ) : showPlaceholderAction ? (
+          <span
+            style={{
+              width: workspaceUseButtonWidthPx,
+              height: 32,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#86efac',
+              fontSize: 9,
+              fontWeight: 800,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              fontFamily: 'var(--font-mono)',
+              boxSizing: 'border-box',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              background: 'transparent',
+            }}
+          >
+            Loaded
+          </span>
+        ) : (
+          <span />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceTable({ workspaces, activePath, onReveal, onActivate, showHeader = true, scrollable = true, placeholderForActive = false, highlightLoaded = false, nameTone = 'green' }) {
+  if (!workspaces?.length) return null;
+
+  return (
+    <div
+      style={{
+        border: highlightLoaded ? '1px solid rgba(52,211,153,0.35)' : '1px solid var(--border)',
+        borderRadius: 12,
+        overflow: 'hidden',
+        background: highlightLoaded ? 'rgba(6,95,70,0.18)' : 'rgba(255,255,255,0.02)',
+      }}
+    >
+      {showHeader ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: workspaceModalColumns,
+            gap: 12,
+            padding: '10px 14px',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            background: 'rgba(255,255,255,0.02)',
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '0.07em',
+            textTransform: 'uppercase',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <span style={{ justifySelf: 'start' }}>Workspace</span>
+          <span style={{ justifySelf: 'start' }}>Loaded</span>
+          <span style={{ justifySelf: 'start' }}>Path</span>
+          <span style={{ justifySelf: 'end' }}>Actions</span>
+        </div>
+      ) : null}
+      <div style={scrollable ? { maxHeight: 220, overflowY: 'auto' } : undefined}>
+        {workspaces.map((workspace, index) => {
+          return (
+            <div
+              key={workspace.id}
+              style={{
+                borderTop: !showHeader && index === 0 ? 'none' : index === 0 && showHeader ? 'none' : '1px solid rgba(255,255,255,0.05)',
+              }}
+            >
+              <WorkspaceTableRow
+                workspace={workspace}
+                isActive={workspace.path === activePath}
+                onReveal={onReveal}
+                onActivate={onActivate}
+                showPlaceholderAction={placeholderForActive}
+                highlightLoaded={highlightLoaded}
+                nameTone={nameTone}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RibbonTab({ label, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        position: 'relative',
+        border: 'none',
+        background: 'transparent',
+        color: active ? 'var(--text)' : 'var(--text-secondary)',
+        fontSize: 13,
+        fontWeight: active ? 700 : 600,
+        padding: '8px 0',
+        cursor: 'pointer',
+      }}
+    >
+      <span>{label}</span>
+      {active ? (
+        <span
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: -1,
+            height: 3,
+            borderRadius: 999,
+            background: 'var(--primary)',
+            boxShadow: '0 0 18px rgba(91,154,255,0.35)',
+          }}
+        />
+      ) : null}
+    </button>
+  );
+}
+
+function AppRibbon({ onOpenWorkspace }) {
+  const [activeTab, setActiveTab] = useState('workspace');
+
+  return (
+    <div
+      style={{
+        background: 'linear-gradient(180deg, rgba(13,17,27,0.98), rgba(16,22,35,0.98))',
+        borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: 22,
+          padding: '0 20px',
+          minHeight: 38,
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+        }}
+      >
+        <RibbonTab
+          label="Workspace"
+          active={activeTab === 'workspace'}
+          onClick={() => {
+            setActiveTab('workspace');
+            onOpenWorkspace?.();
+          }}
+        />
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          gap: 0,
+          padding: '0 20px',
+          minHeight: 0,
+          overflowX: 'auto',
+        }}
+      >
+        
+      </div>
+    </div>
+  );
+}
+
 export default function AppShell({ groups, standaloneItems = [], defaultActiveId }) {
   const [collapsed, setCollapsed] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(() =>
@@ -299,9 +685,6 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
   const primary = company.namePrimary || company.name || 'App';
   const accent = company.nameAccent || '';
   const fullName = `${primary}${accent}`.trim() || 'Launchline';
-  const initials = company.initials || primary.slice(0, 1).toUpperCase() || 'A';
-  const showIcon = company.showIcon !== false;
-  const showName = company.showName !== false;
 
   const flatNavItems = useMemo(
     () => [...groups.flatMap((group) => group.items), ...standaloneItems.filter((item) => !item.divider)],
@@ -310,8 +693,12 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
 
   const [activeId, setActiveId] = useState(defaultActiveId || flatNavItems[0]?.id);
   const [isStorageOpen, setIsStorageOpen] = useState(false);
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [storageMessage, setStorageMessage] = useState(null);
   const [storageBusy, setStorageBusy] = useState(false);
+  const [workspaceInfo, setWorkspaceInfo] = useState(null);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceMessage, setWorkspaceMessage] = useState(null);
   // Track visited pages so we keep them mounted (hidden) once first visited
   const [visitedPages, setVisitedPages] = useState(
     () => new Set([defaultActiveId || flatNavItems[0]?.id].filter(Boolean))
@@ -339,6 +726,30 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
     }
   }, [activeId, defaultActiveId, flatNavItems]);
 
+  useEffect(() => {
+    let isMounted = true;
+    window.electronAPI?.getWorkspaceState?.()
+      .then((info) => { if (isMounted && info) setWorkspaceInfo(info); })
+      .catch(() => {});
+
+    const unsubscribe = window.electronAPI?.onWorkspaceChanged?.((info) => {
+      if (!isMounted || !info) return;
+      setWorkspaceInfo(info);
+      refreshStorageInfo?.().catch(() => {});
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe?.();
+    };
+  }, [refreshStorageInfo]);
+
+  const activeWorkspaceId = workspaceInfo?.activeWorkspace?.id || 'launchline-internal';
+
+  useEffect(() => {
+    setVisitedPages(new Set([activeId].filter(Boolean)));
+  }, [activeWorkspaceId]);
+
   const activeItem = flatNavItems.find((item) => item.id === activeId) || flatNavItems[0];
   const ActivePage = activeItem?.page;
 
@@ -356,6 +767,24 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
     setIsStorageOpen(true);
     await refreshStorageInfo?.();
   }, [refreshStorageInfo]);
+
+  const openWorkspaceModal = useCallback(async () => {
+    setWorkspaceMessage(null);
+    setIsWorkspaceOpen(true);
+    try {
+      const info = await window.electronAPI?.getWorkspaceState?.();
+      if (info) setWorkspaceInfo(info);
+      await refreshStorageInfo?.();
+    } catch {}
+  }, [refreshStorageInfo]);
+
+  useEffect(() => {
+    const handleOpenWorkspaceSelector = () => {
+      openWorkspaceModal().catch(() => {});
+    };
+    window.addEventListener('launchline:open-workspace-selector', handleOpenWorkspaceSelector);
+    return () => window.removeEventListener('launchline:open-workspace-selector', handleOpenWorkspaceSelector);
+  }, [openWorkspaceModal]);
 
   const handleExportSettings = useCallback(async () => {
     setStorageBusy(true);
@@ -402,21 +831,55 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
     }
   }, [refreshStorageInfo, resetSettings]);
 
+  const handlePickWorkspace = useCallback(async () => {
+    setWorkspaceBusy(true);
+    try {
+      const result = await window.electronAPI?.pickWorkspaceFolder?.();
+      if (result?.ok && result.state) {
+        setWorkspaceInfo(result.state);
+        setWorkspaceMessage(null);
+        await refreshStorageInfo?.();
+      } else if (!result?.canceled) {
+        setWorkspaceMessage({ tone: 'error', text: result?.error || 'Unable to switch workspace.' });
+      }
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [refreshStorageInfo]);
+
+  const handleActivateWorkspace = useCallback(async (workspace) => {
+    if (!workspace?.path) return;
+    setWorkspaceBusy(true);
+    try {
+      const result = workspace.isInternal
+        ? await window.electronAPI?.useInternalWorkspace?.()
+        : await window.electronAPI?.setActiveWorkspace?.(workspace.path);
+      if (result?.ok && result.state) {
+        setWorkspaceInfo(result.state);
+        setWorkspaceMessage(null);
+        await refreshStorageInfo?.();
+      } else if (!result?.canceled) {
+        setWorkspaceMessage({ tone: 'error', text: result?.error || 'Unable to switch workspace.' });
+      }
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [refreshStorageInfo]);
+
   if (!ActivePage) return null;
+
+  const analysisWorkspace = storageInfo?.analysisWorkspace || workspaceInfo?.activeWorkspace || null;
+  const recentWorkspaceCards = workspaceInfo?.recentWorkspaces || [];
+  const recentWorkspaceList = recentWorkspaceCards.filter((workspace) => (
+    workspace.path !== workspaceInfo?.activeWorkspace?.path
+  ));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <TitleBar primary={primary} accent={accent}/>
+      <AppRibbon onOpenWorkspace={openWorkspaceModal} />
       <div className="app-layout" style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} style={{ flexShrink: 0 }}>
-          <div className="sidebar-header">
-            {showIcon ? <div className="sidebar-logo">{initials}</div> : null}
-            {showName ? (
-              <span className="sidebar-brand">
-                <BrandText primary={primary} accent={accent} />
-              </span>
-            ) : null}
-          </div>
           <nav className="sidebar-nav">
             {groups.map((group) => {
               const isExpanded = expandedGroups[group.id];
@@ -496,7 +959,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
             {flatNavItems.map(({ id, page: Page }) => {
               if (!Page || !visitedPages.has(id)) return null;
               return (
-                <div key={id} style={{ display: activeId === id ? 'contents' : 'none', flex: 1, overflow: 'hidden' }}>
+                <div key={`${activeWorkspaceId}:${id}`} style={{ display: activeId === id ? 'contents' : 'none', flex: 1, overflow: 'hidden' }}>
                   <Page />
                 </div>
               );
@@ -508,6 +971,8 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
             savedAt={savedAt}
             onNavigate={navigateTo}
             onOpenStorage={openStorageModal}
+            workspaceKey={activeWorkspaceId}
+            workspaceLabel={analysisWorkspace?.name || ''}
           />
         </div>
       </div>
@@ -522,7 +987,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
           footer={(
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {storageInfo ? `Schema v${storageInfo.schemaVersion} · workspace ${storageInfo.workspace.id}` : 'Loading storage details...'}
+                {storageInfo ? `Schema v${storageInfo.schemaVersion} · active workspace ${storageInfo.analysisWorkspace?.name || storageInfo.workspace.id}` : 'Loading storage details...'}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 <button
@@ -558,7 +1023,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
         >
           <div style={{ display: 'grid', gap: 14 }}>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-              Launchline now keeps app-wide preferences in global app data, while command history, nav state, hygiene history, and other mutable workspace records stay scoped to this repo.
+              Launchline keeps app-wide preferences in global app data. Analysis history and other mutable records are separated from the repo currently under review.
             </div>
             {storageMessage ? (
               <div style={{
@@ -576,6 +1041,12 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
             {storageInfo ? (
               <>
                 <StoragePathCard
+                  label="Active Analysis Workspace"
+                  pathValue={storageInfo.analysisWorkspace.path}
+                  helper="Repo currently being analyzed by Launchline."
+                  onReveal={revealPath}
+                />
+                <StoragePathCard
                   label="Global Settings"
                   pathValue={storageInfo.global.settingsPath}
                   helper="Persistent app preferences shared across Launchline workspaces."
@@ -584,7 +1055,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
                 <StoragePathCard
                   label="Workspace Storage"
                   pathValue={storageInfo.workspace.storagePath}
-                  helper="Repo-specific state and history for this working directory."
+                  helper="App-data storage bucket currently assigned to the active analysis workspace."
                   onReveal={revealPath}
                 />
                 <StoragePathCard
@@ -599,6 +1070,87 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
                 Loading storage paths...
               </div>
             )}
+          </div>
+        </Modal>
+      ) : null}
+      {isWorkspaceOpen ? (
+        <Modal
+          onClose={() => setIsWorkspaceOpen(false)}
+          title="Workspace Loading"
+          subtitle="Launchline loads the selected workspace as the current target so every feature points at that repo when you decide to run checks."
+          icon={<FolderOpen size={18} />}
+          accentColor="#86efac"
+          maxWidth={820}
+          footer={(
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 12, color: '#86efac' }}>
+                {analysisWorkspace ? `Loaded workspace: ${analysisWorkspace.name}` : 'Loading workspace context...'}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={handlePickWorkspace}
+                  disabled={workspaceBusy}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(52,211,153,0.24)',
+                    background: 'rgba(52,211,153,0.12)',
+                    color: workspaceBusy ? 'rgba(134,239,172,0.5)' : '#86efac',
+                    cursor: workspaceBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  <FolderOpen size={14} />
+                  <span>Choose Folder</span>
+                </button>
+              </div>
+            </div>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 14 }}>
+            {workspaceMessage?.tone === 'error' ? (
+              <div style={{
+                borderRadius: 12,
+                border: '1px solid rgba(248,113,113,0.35)',
+                background: 'rgba(127,29,29,0.18)',
+                color: '#fca5a5',
+                padding: '12px 14px',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}>
+                {workspaceMessage.text}
+              </div>
+            ) : null}
+            <WorkspaceTable
+              workspaces={workspaceInfo?.activeWorkspace ? [workspaceInfo.activeWorkspace] : []}
+              activePath={workspaceInfo?.activeWorkspace?.path}
+              onReveal={revealPath}
+              showHeader={false}
+              scrollable={false}
+              placeholderForActive
+              highlightLoaded
+            />
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-secondary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                Recent Workspaces
+              </div>
+              {recentWorkspaceList.length ? (
+                <WorkspaceTable
+                  workspaces={recentWorkspaceList}
+                  activePath={workspaceInfo?.activeWorkspace?.path}
+                  onReveal={revealPath}
+                  onActivate={handleActivateWorkspace}
+                  nameTone="blue"
+                />
+              ) : (
+                <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                  No other recent workspaces yet. Choose a folder to load another repo into Launchline.
+                </div>
+              )}
+            </div>
           </div>
         </Modal>
       ) : null}

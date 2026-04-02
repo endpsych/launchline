@@ -4,7 +4,7 @@
   "description": "Standalone desktop app for Python tooling and production readiness",
   "packageManager": "npm@10.8.2",
   "engines": {
-    "node": "20.x",
+    "node": "24.x",
     "npm": "10.x"
   },
   "main": "src/main.js",
@@ -12,7 +12,7 @@
     "prestart": "node scripts/check-runtime.cjs",
     "prebuild": "node scripts/check-runtime.cjs",
     "start": "concurrently \"npm run react\" \"wait-on http://localhost:3001 && electron .\"",
-    "react": "set \"PORT=3001\" && react-scripts start",
+    "react": "set \"BROWSER=none\" && set \"PORT=3001\" && react-scripts start",
     "build": "react-scripts build && electron-builder",
     "electron": "electron .",
     "dev": "rmdir /s /q node_modules\\.cache 2>nul & npm start",

@@ -462,7 +462,7 @@ export default function SecretsPage({ embedded = false }) {
   const secretChecklist = pythonTools.secretChecklist || SETTINGS_DEFAULT.pythonTools.secretChecklist;
   const secretPolicies = pythonTools.secretPolicies || SETTINGS_DEFAULT.pythonTools.secretPolicies;
 
-  const [secretsStatus, setSecretsStatus] = useState({ loading: true, data: null, error: null });
+  const [secretsStatus, setSecretsStatus] = useState({ loading: false, data: null, error: null });
 
   const expectedSecretVars = useMemo(
     () => [...new Set(SECRET_PROVIDERS.flatMap((p) => [...p.requiredEnv, ...(p.optionalEnv || [])]))],
@@ -869,7 +869,6 @@ export default function SecretsPage({ embedded = false }) {
   const [snippetTab, setSnippetTab] = useState('husky');             // active tab in pre-commit snippet picker
   const [copiedSnippet, setCopiedSnippet] = useState(null);         // feedback for snippet copy button
   const [tickNow, setTickNow] = useState(() => Date.now());          // periodically updated for stale calc
-  const loadSecretsStatusRef = useRef(null);                         // stable ref to avoid stale closure
   const [copiedPath, setCopiedPath] = useState(null);
   // ── Variables section state ───────────────────────────────────────────────
   const [varsExpanded, setVarsExpanded] = useState(false);
@@ -925,11 +924,8 @@ export default function SecretsPage({ embedded = false }) {
     [commandLog.loading, terminalFilteredEntries.length]
   );
 
-  // Keep ref pointing at the latest loadSecretsStatus so the watcher closure never goes stale
-  loadSecretsStatusRef.current = loadSecretsStatus;
-
-  // Initial load
-  useEffect(() => { loadSecretsStatus(); loadCommandLog(); }, []); // eslint-disable-line
+  // Initial workspace load: keep lightweight context available without auto-running a secrets scan.
+  useEffect(() => { loadCommandLog(); }, []); // eslint-disable-line
 
   // Clock tick — re-evaluates stale condition every 30 s without forcing heavy recomputation
   useEffect(() => {
@@ -937,12 +933,11 @@ export default function SecretsPage({ embedded = false }) {
     return () => clearInterval(t);
   }, []);
 
-  // Hygiene file watcher — subscribe once; auto-refresh on every file-change event
+  // Hygiene file watcher — subscribe once and mark the current snapshot stale when files change.
   useEffect(() => {
     if (!window.electronAPI?.onHygieneFileChanged) return;
     const unsub = window.electronAPI.onHygieneFileChanged(({ changedAt }) => {
       setLastFileChangedAt(changedAt);
-      loadSecretsStatusRef.current?.();
     });
     return unsub;
   }, []); // eslint-disable-line
@@ -2801,6 +2796,22 @@ export default function SecretsPage({ embedded = false }) {
         {secretsStatus.error ? (
           <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 12, border: '1px solid rgba(248,113,113,0.24)', background: 'rgba(248,113,113,0.08)', color: '#fca5a5', fontSize: 13 }}>
             {secretsStatus.error}
+          </div>
+        ) : null}
+        {secretsStatus.data === null && !secretsStatus.loading && !secretsStatus.error ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: '12px 14px',
+              borderRadius: 12,
+              border: '1px solid rgba(125,211,252,0.24)',
+              background: 'rgba(8,47,73,0.22)',
+              color: '#bae6fd',
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            Workspace loaded. Run Check when you want Launchline to scan this repo’s secrets hygiene.
           </div>
         ) : null}
         <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -27,6 +27,11 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const APP_DISPLAY_NAME = 'Launchline';
 const DEV_SERVER_PORT = process.env.PORT || '3001';
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
+
+app.setName(APP_DISPLAY_NAME);
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.launchline');
+}
 // ── Global Path Constants (Ground Truth) ──────────────────────────────────────
 const ROOT_DIR = path.join(__dirname, '..');
 const SCRIPTS_DIR = path.join(ROOT_DIR, 'scripts');
@@ -41,11 +46,20 @@ const CRASH_DUMPS_DIR = path.join(APP_RUNTIME_DIR, 'crash-dumps');
 const APP_STORAGE_DIR = path.join(APP_DATA_ROOT_DIR, 'storage');
 const GLOBAL_STORAGE_DIR = path.join(APP_STORAGE_DIR, 'global');
 const GLOBAL_SETTINGS_DIR = path.join(GLOBAL_STORAGE_DIR, 'settings');
+const GLOBAL_STATE_DIR = path.join(GLOBAL_STORAGE_DIR, 'state');
 const WORKSPACES_STORAGE_DIR = path.join(APP_STORAGE_DIR, 'workspaces');
 const WORKSPACE_STORAGE_ID = createWorkspaceStorageId(ROOT_DIR);
 const WORKSPACE_STORAGE_DIR = path.join(WORKSPACES_STORAGE_DIR, WORKSPACE_STORAGE_ID);
 const WORKSPACE_STATE_DIR = path.join(WORKSPACE_STORAGE_DIR, 'state');
 const WORKSPACE_HISTORY_DIR = path.join(WORKSPACE_STORAGE_DIR, 'history');
+const WORKSPACE_SELECTION_PATH = path.join(GLOBAL_STATE_DIR, 'workspace-state.json');
+const DEFAULT_WORKSPACE_STATE = {
+  activeWorkspacePath: ROOT_DIR,
+  recentWorkspacePaths: [ROOT_DIR],
+  workspaceLoadedAt: {
+    [ROOT_DIR]: Date.now(),
+  },
+};
 
 for (const targetDir of [
   DATA_DIR,
@@ -58,6 +72,7 @@ for (const targetDir of [
   APP_STORAGE_DIR,
   GLOBAL_STORAGE_DIR,
   GLOBAL_SETTINGS_DIR,
+  GLOBAL_STATE_DIR,
   WORKSPACES_STORAGE_DIR,
   WORKSPACE_STORAGE_DIR,
   WORKSPACE_STATE_DIR,
@@ -114,21 +129,18 @@ const RUN_HISTORY_PATH = path.join(WORKSPACE_HISTORY_DIR, 'run-history.json');
 const LEGACY_RUN_HISTORY_PATHS = [
   path.join(LEGACY_APP_HISTORY_DIR, 'run-history.json'),
   path.join(ROOT_DIR, '.launchline-run-history.json'),
-  path.join(ROOT_DIR, '.repo-readiness-run-history.json'),
   path.join(ROOT_DIR, '.appcraft-run-history.json'),
 ];
 const COMMAND_LOG_PATH = path.join(WORKSPACE_HISTORY_DIR, 'command-log.json');
 const LEGACY_COMMAND_LOG_PATHS = [
   path.join(LEGACY_APP_HISTORY_DIR, 'command-log.json'),
   path.join(ROOT_DIR, '.launchline-command-log.json'),
-  path.join(ROOT_DIR, '.repo-readiness-command-log.json'),
   path.join(ROOT_DIR, '.appcraft-command-log.json'),
 ];
 const HYGIENE_HISTORY_PATH = path.join(WORKSPACE_HISTORY_DIR, 'hygiene-history.json');
 const LEGACY_HYGIENE_HISTORY_PATHS = [
   path.join(LEGACY_APP_HISTORY_DIR, 'hygiene-history.json'),
   path.join(ROOT_DIR, '.launchline-hygiene-history.json'),
-  path.join(ROOT_DIR, '.repo-readiness-hygiene-history.json'),
   path.join(ROOT_DIR, '.appcraft-hygiene-history.json'),
 ];
 const DICTIONARY_META_PATH = () => path.join(DATA_DIR, 'dictionaryMetadata.json');
@@ -147,6 +159,148 @@ const PYTHON_LIST_INSTALLED_PACKAGES_SCRIPT = [
   '    packages.append({"name": name, "version": str(dist.version or "").strip()})',
   'print(json.dumps(packages))',
 ].join('\n');
+
+let mainWindow = null;
+let workspaceState = null;
+
+function normalizeWorkspacePath(candidatePath) {
+  if (!candidatePath) return null;
+  return path.resolve(String(candidatePath));
+}
+
+function isInternalWorkspacePath(candidatePath) {
+  return normalizeWorkspacePath(candidatePath) === path.resolve(ROOT_DIR);
+}
+
+function getWorkspaceScopedDirs(workspacePath) {
+  const resolvedPath = normalizeWorkspacePath(workspacePath) || ROOT_DIR;
+  const workspaceId = createWorkspaceStorageId(resolvedPath);
+  const storageDir = path.join(WORKSPACES_STORAGE_DIR, workspaceId);
+  const stateDir = path.join(storageDir, 'state');
+  const historyDir = path.join(storageDir, 'history');
+  ensureDir(storageDir);
+  ensureDir(stateDir);
+  ensureDir(historyDir);
+  return { id: workspaceId, storageDir, stateDir, historyDir };
+}
+
+function buildWorkspaceDescriptor(workspacePath, loadedAtMap = workspaceState?.workspaceLoadedAt) {
+  const resolvedPath = normalizeWorkspacePath(workspacePath) || ROOT_DIR;
+  const isInternal = isInternalWorkspacePath(resolvedPath);
+  const exists = fs.existsSync(resolvedPath);
+  return {
+    id: isInternal ? 'launchline-internal' : createWorkspaceStorageId(resolvedPath),
+    path: resolvedPath,
+    name: isInternal ? APP_DISPLAY_NAME : (path.basename(resolvedPath) || resolvedPath),
+    exists,
+    isInternal,
+    kind: isInternal ? 'internal' : 'folder',
+    loadedAt: Number(loadedAtMap?.[resolvedPath]) || null,
+  };
+}
+
+function normalizeWorkspaceState(nextState) {
+  const activeWorkspacePath = normalizeWorkspacePath(nextState?.activeWorkspacePath) || ROOT_DIR;
+  const recentWorkspacePaths = [
+    activeWorkspacePath,
+    ...((Array.isArray(nextState?.recentWorkspacePaths) ? nextState.recentWorkspacePaths : [])
+      .map(normalizeWorkspacePath)
+      .filter(Boolean)),
+  ].filter((value, index, values) => values.indexOf(value) === index).slice(0, 8);
+  const workspaceLoadedAt = {};
+
+  if (nextState?.workspaceLoadedAt && typeof nextState.workspaceLoadedAt === 'object') {
+    for (const [rawPath, rawLoadedAt] of Object.entries(nextState.workspaceLoadedAt)) {
+      const resolvedPath = normalizeWorkspacePath(rawPath);
+      const numericLoadedAt = Number(rawLoadedAt);
+      if (!resolvedPath || !Number.isFinite(numericLoadedAt) || numericLoadedAt <= 0) continue;
+      workspaceLoadedAt[resolvedPath] = numericLoadedAt;
+    }
+  }
+
+  if (Array.isArray(nextState?.recentWorkspaces)) {
+    for (const entry of nextState.recentWorkspaces) {
+      const resolvedPath = normalizeWorkspacePath(entry?.path || entry);
+      const numericLoadedAt = Number(entry?.loadedAt);
+      if (!resolvedPath || !Number.isFinite(numericLoadedAt) || numericLoadedAt <= 0) continue;
+      workspaceLoadedAt[resolvedPath] = numericLoadedAt;
+    }
+  }
+
+  const activeLoadedAt = Number(workspaceLoadedAt[activeWorkspacePath]);
+  if (!Number.isFinite(activeLoadedAt) || activeLoadedAt <= 0) {
+    workspaceLoadedAt[activeWorkspacePath] = Date.now();
+  }
+
+  return {
+    activeWorkspacePath,
+    recentWorkspacePaths,
+    workspaceLoadedAt,
+  };
+}
+
+function readWorkspaceState() {
+  return normalizeWorkspaceState(readMigratedJson(WORKSPACE_SELECTION_PATH, [], DEFAULT_WORKSPACE_STATE));
+}
+
+function writeWorkspaceState(nextState) {
+  workspaceState = normalizeWorkspaceState(nextState);
+  writeJsonAtomic(WORKSPACE_SELECTION_PATH, workspaceState);
+  return workspaceState;
+}
+
+function getActiveWorkspacePath() {
+  if (!workspaceState) {
+    workspaceState = readWorkspaceState();
+  }
+  return workspaceState.activeWorkspacePath;
+}
+
+function getActiveWorkspaceInfo() {
+  const loadedAtMap = workspaceState?.workspaceLoadedAt || {};
+  const activeWorkspace = buildWorkspaceDescriptor(getActiveWorkspacePath(), loadedAtMap);
+  const recentWorkspaces = (workspaceState?.recentWorkspacePaths || [ROOT_DIR]).map((workspacePath) => buildWorkspaceDescriptor(workspacePath, loadedAtMap));
+  return {
+    activeWorkspace,
+    recentWorkspaces,
+    internalWorkspace: buildWorkspaceDescriptor(ROOT_DIR, loadedAtMap),
+  };
+}
+
+function refreshWorkspaceBindings() {
+  initCommandLog();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    setupHygieneWatcher(mainWindow);
+    mainWindow.webContents.send('workspace:changed', getActiveWorkspaceInfo());
+  }
+}
+
+function setActiveWorkspacePath(nextWorkspacePath) {
+  const resolvedPath = normalizeWorkspacePath(nextWorkspacePath);
+  const loadedAt = Date.now();
+  if (!resolvedPath) {
+    throw new Error('No workspace path provided.');
+  }
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Workspace path does not exist: ${resolvedPath}`);
+  }
+  if (!fs.statSync(resolvedPath).isDirectory()) {
+    throw new Error('Workspace path must be a directory.');
+  }
+
+  writeWorkspaceState({
+    activeWorkspacePath: resolvedPath,
+    recentWorkspacePaths: [resolvedPath, ...(workspaceState?.recentWorkspacePaths || [])],
+    workspaceLoadedAt: {
+      ...(workspaceState?.workspaceLoadedAt || {}),
+      [resolvedPath]: loadedAt,
+    },
+  });
+  refreshWorkspaceBindings();
+  return getActiveWorkspaceInfo();
+}
+
+workspaceState = readWorkspaceState();
 
 // ── Directory Guard ───────────────────────────────────────────────────────────
 function ensureDataDir() {
@@ -207,17 +361,21 @@ function venvHasInstalledPackages(venvDir) {
   }
 }
 
-function resolveProjectVenvDir() {
-  const scriptsVenvDir = path.join(SCRIPTS_DIR, '.venv');
-  const rootVenvDir = path.join(ROOT_DIR, '.venv');
-  const scriptsExists = fs.existsSync(scriptsVenvDir);
-  const rootExists = fs.existsSync(rootVenvDir);
+function resolveProjectVenvDir(workspacePath = getActiveAnalysisRoot()) {
+  const resolvedWorkspacePath = normalizeWorkspacePath(workspacePath) || ROOT_DIR;
+  const rootVenvDir = path.join(resolvedWorkspacePath, '.venv');
+  const scriptsVenvDir = path.join(getWorkspaceScriptsDir(resolvedWorkspacePath), '.venv');
+  const candidates = isInternalWorkspacePath(resolvedWorkspacePath)
+    ? [scriptsVenvDir, rootVenvDir]
+    : [rootVenvDir, scriptsVenvDir];
 
-  if (scriptsExists && venvHasInstalledPackages(scriptsVenvDir)) return scriptsVenvDir;
-  if (rootExists && venvHasInstalledPackages(rootVenvDir)) return rootVenvDir;
-  if (scriptsExists) return scriptsVenvDir;
-  if (rootExists) return rootVenvDir;
-  return scriptsVenvDir;
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && venvHasInstalledPackages(candidate)) return candidate;
+  }
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
 }
 
 async function setupVenv() {
@@ -410,6 +568,58 @@ function readSettings() {
   }
 }
 
+function getActiveAnalysisRoot() {
+  return getActiveWorkspacePath();
+}
+
+function getWorkspaceStatePaths(workspacePath = getActiveWorkspacePath()) {
+  return getWorkspaceScopedDirs(workspacePath);
+}
+
+function getInternalLegacyPaths(legacyPaths, workspacePath) {
+  return isInternalWorkspacePath(workspacePath) ? legacyPaths : [];
+}
+
+function getActiveVenvMetadataPath(workspacePath = getActiveWorkspacePath()) {
+  return path.join(getWorkspaceStatePaths(workspacePath).stateDir, 'venv-meta.json');
+}
+
+function getActiveCommandLogPath(workspacePath = getActiveWorkspacePath()) {
+  return path.join(getWorkspaceStatePaths(workspacePath).historyDir, 'command-log.json');
+}
+
+function getActiveRunHistoryPath(workspacePath = getActiveWorkspacePath()) {
+  return path.join(getWorkspaceStatePaths(workspacePath).historyDir, 'run-history.json');
+}
+
+function getActiveHygieneHistoryPath() {
+  return path.join(getWorkspaceScopedDirs(getActiveWorkspacePath()).historyDir, 'hygiene-history.json');
+}
+
+function getWorkspaceScriptsDir(workspacePath = getActiveAnalysisRoot()) {
+  return path.join(normalizeWorkspacePath(workspacePath) || ROOT_DIR, 'scripts');
+}
+
+function getWorkspaceDependencySourcePaths(workspacePath = getActiveAnalysisRoot()) {
+  const resolvedWorkspacePath = normalizeWorkspacePath(workspacePath) || ROOT_DIR;
+  const requirementsCandidates = [
+    path.join(resolvedWorkspacePath, 'requirements.txt'),
+    path.join(resolvedWorkspacePath, 'requirements-dev.txt'),
+    path.join(resolvedWorkspacePath, 'requirements.in'),
+    path.join(resolvedWorkspacePath, 'requirements', 'base.txt'),
+    path.join(resolvedWorkspacePath, 'requirements', 'dev.txt'),
+    path.join(getWorkspaceScriptsDir(resolvedWorkspacePath), 'etl', 'requirements.txt'),
+  ];
+
+  return {
+    workspaceRoot: resolvedWorkspacePath,
+    scriptsDir: getWorkspaceScriptsDir(resolvedWorkspacePath),
+    pyprojectPath: path.join(resolvedWorkspacePath, 'pyproject.toml'),
+    uvLockPath: path.join(resolvedWorkspacePath, 'uv.lock'),
+    requirementsPath: requirementsCandidates.find((candidate) => fs.existsSync(candidate)) || requirementsCandidates[0],
+  };
+}
+
 function writeSettings(settings) {
   writeJsonAtomic(SETTINGS_PATH, normalizeSettings(settings, {
     appDisplayName: APP_DISPLAY_NAME,
@@ -418,15 +628,17 @@ function writeSettings(settings) {
 }
 
 function buildStorageInfo() {
+  const analysisWorkspace = getActiveWorkspaceInfo().activeWorkspace;
+  const analysisWorkspaceStorage = getWorkspaceScopedDirs(analysisWorkspace.path);
   return {
     appName: APP_DISPLAY_NAME,
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     workspace: {
-      id: WORKSPACE_STORAGE_ID,
-      rootPath: ROOT_DIR,
-      storagePath: WORKSPACE_STORAGE_DIR,
-      statePath: WORKSPACE_STATE_DIR,
-      historyPath: WORKSPACE_HISTORY_DIR,
+      id: analysisWorkspaceStorage.id,
+      rootPath: analysisWorkspace.path,
+      storagePath: analysisWorkspaceStorage.storageDir,
+      statePath: analysisWorkspaceStorage.stateDir,
+      historyPath: analysisWorkspaceStorage.historyDir,
     },
     global: {
       appDataRoot: APP_DATA_ROOT_DIR,
@@ -440,6 +652,8 @@ function buildStorageInfo() {
       logsPath: LOGS_DIR,
       crashDumpsPath: CRASH_DUMPS_DIR,
     },
+    analysisWorkspace,
+    internalWorkspace: buildWorkspaceDescriptor(ROOT_DIR),
   };
 }
 
@@ -513,6 +727,36 @@ ipcMain.handle('settings:reset', async () => {
   }
 });
 
+// ── IPC: Workspace state ──────────────────────────────────────────────────────
+ipcMain.handle('workspace:get-state', async () => getActiveWorkspaceInfo());
+ipcMain.handle('workspace:pick-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose a workspace to analyze',
+      defaultPath: getActiveWorkspacePath(),
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+    return { ok: true, state: setActiveWorkspacePath(result.filePaths[0]) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('workspace:set-active', async (event, workspacePath) => {
+  try {
+    return { ok: true, state: setActiveWorkspacePath(workspacePath) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('workspace:use-internal', async () => {
+  try {
+    return { ok: true, state: setActiveWorkspacePath(ROOT_DIR) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ── IPC: Navigation state ─────────────────────────────────────────────────────
 ipcMain.handle('nav:get-last-page', async () => {
   try {
@@ -553,8 +797,13 @@ const PYTHON_COMMAND_LOG_LIMIT = 150;
 const PYTHON_COMMAND_LOG = [];
 
 function initCommandLog() {
+  PYTHON_COMMAND_LOG.length = 0;
   try {
-    const parsed = readMigratedJson(COMMAND_LOG_PATH, LEGACY_COMMAND_LOG_PATHS, []);
+    const parsed = readMigratedJson(
+      getActiveCommandLogPath(),
+      getInternalLegacyPaths(LEGACY_COMMAND_LOG_PATHS, getActiveWorkspacePath()),
+      []
+    );
     if (Array.isArray(parsed)) {
       // Only restore persisted (non-probe) entries; probes are session-only
       PYTHON_COMMAND_LOG.push(...parsed.slice(0, PYTHON_COMMAND_LOG_LIMIT));
@@ -571,20 +820,24 @@ function appendPythonCommandLog(entry) {
     PYTHON_COMMAND_LOG.length = PYTHON_COMMAND_LOG_LIMIT;
   }
   // Persist run/action entries to disk (probes are session-only noise)
-  if (entry.source === 'run' || entry.source === 'action') {
-    try {
-      const toSave = PYTHON_COMMAND_LOG.filter((e) => e.source === 'run' || e.source === 'action');
-      writeJsonAtomic(COMMAND_LOG_PATH, toSave.slice(0, PYTHON_COMMAND_LOG_LIMIT));
-    } catch {}
+    if (entry.source === 'run' || entry.source === 'action') {
+      try {
+        const toSave = PYTHON_COMMAND_LOG.filter((e) => e.source === 'run' || e.source === 'action');
+        writeJsonAtomic(getActiveCommandLogPath(), toSave.slice(0, PYTHON_COMMAND_LOG_LIMIT));
+      } catch {}
+    }
   }
-}
 
 // ── Run History (persisted JSON log) ─────────────────────────────────────────
 const RUN_HISTORY_LIMIT = 200;
 
 function loadRunHistory() {
   try {
-    const parsed = readMigratedJson(RUN_HISTORY_PATH, LEGACY_RUN_HISTORY_PATHS, []);
+    const parsed = readMigratedJson(
+      getActiveRunHistoryPath(),
+      getInternalLegacyPaths(LEGACY_RUN_HISTORY_PATHS, getActiveWorkspacePath()),
+      []
+    );
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -596,7 +849,7 @@ function appendRunHistory(entry) {
     const history = loadRunHistory();
     history.unshift(entry);
     if (history.length > RUN_HISTORY_LIMIT) history.length = RUN_HISTORY_LIMIT;
-    writeJsonAtomic(RUN_HISTORY_PATH, history);
+    writeJsonAtomic(getActiveRunHistoryPath(), history);
   } catch (err) {
     console.warn('[run-history] Failed to write run history:', err.message);
   }
@@ -704,14 +957,20 @@ function formatTomlArray(values) {
   return `[\n${values.map((value) => `  "${value}",`).join('\n')}\n]`;
 }
 
-function readPythonProjectConfig() {
-  if (!fs.existsSync(PYPROJECT_PATH)) {
+function readPythonProjectConfig(workspacePath = getActiveAnalysisRoot()) {
+  const workspaceRoot = normalizeWorkspacePath(workspacePath) || ROOT_DIR;
+  const workspaceName = path.basename(workspaceRoot) || 'workspace';
+  const { pyprojectPath, requirementsPath } = getWorkspaceDependencySourcePaths(workspaceRoot);
+
+  if (!fs.existsSync(pyprojectPath)) {
     return {
       exists: false,
       metadata: {
-        name: 'launchline-python-tools',
+        name: workspaceName,
         version: '0.1.0',
-        description: 'uv-managed Python workspace for Launchline utilities and local data tooling.',
+        description: isInternalWorkspacePath(workspaceRoot)
+          ? 'uv-managed Python workspace for Launchline utilities and local data tooling.'
+          : `Python workspace configuration for ${workspaceName}.`,
         requiresPython: '>=3.12',
       },
       dependencies: [],
@@ -719,8 +978,8 @@ function readPythonProjectConfig() {
     };
   }
 
-  const content = fs.readFileSync(PYPROJECT_PATH, 'utf8');
-  const stat = fs.statSync(PYPROJECT_PATH);
+  const content = fs.readFileSync(pyprojectPath, 'utf8');
+  const stat = fs.statSync(pyprojectPath);
   const buildBackendMatch = content.match(/\[build-system\][\s\S]*?build-backend\s*=\s*"([^"]+)"/m);
   const dependencies = parseTomlStringArray(content, 'dependencies');
   const groups = parseDependencyGroups(content);
@@ -729,7 +988,7 @@ function readPythonProjectConfig() {
     mtime: stat.mtime?.toISOString() || null,
     buildBackend: buildBackendMatch?.[1] || null,
     metadata: {
-      name: parseTomlScalar(content, 'name') || 'launchline-python-tools',
+      name: parseTomlScalar(content, 'name') || workspaceName,
       version: parseTomlScalar(content, 'version') || '0.1.0',
       description: parseTomlScalar(content, 'description') || '',
       requiresPython: parseTomlScalar(content, 'requires-python') || '>=3.12',
@@ -738,10 +997,15 @@ function readPythonProjectConfig() {
     groups,
     dependencyCount: dependencies.length,
     groupCounts: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])),
+    requirementsPath: fs.existsSync(requirementsPath) ? requirementsPath : null,
   };
 }
 
-function buildPythonProjectToml(config) {
+function buildPythonProjectToml(config, workspacePath = getActiveAnalysisRoot()) {
+  const { requirementsPath, workspaceRoot } = getWorkspaceDependencySourcePaths(workspacePath);
+  const relativeRequirementsPath = fs.existsSync(requirementsPath)
+    ? path.relative(workspaceRoot, requirementsPath).replace(/\\/g, '/')
+    : 'requirements.txt';
   const metadata = config.metadata || {};
   const dependencies = Array.isArray(config.dependencies) ? config.dependencies : [];
   const groups = config.groups || {};
@@ -763,8 +1027,8 @@ package = false
 
 [tool.launchline]
 workspace-root = "."
-python-dir = "scripts"
-requirements-fallback = "scripts/etl/requirements.txt"
+python-dir = "."
+requirements-fallback = "${relativeRequirementsPath}"
 `;
 }
 
@@ -774,7 +1038,7 @@ function tokenizeCommand(command) {
   return matches.map((token) => token.replace(/^['"]|['"]$/g, ''));
 }
 
-function resolveAllowedExecutable(commandToken) {
+function resolveAllowedExecutable(commandToken, workspaceRoot = getActiveAnalysisRoot()) {
   if (!commandToken) {
     throw new Error('No command token provided.');
   }
@@ -783,10 +1047,11 @@ function resolveAllowedExecutable(commandToken) {
     return commandToken;
   }
 
-  const candidate = path.normalize(path.join(ROOT_DIR, commandToken));
-  const rootWithSep = `${ROOT_DIR}${path.sep}`;
-  if (candidate !== ROOT_DIR && !candidate.startsWith(rootWithSep)) {
-    throw new Error('Command is outside the project root.');
+  const resolvedWorkspaceRoot = normalizeWorkspacePath(workspaceRoot) || ROOT_DIR;
+  const candidate = path.normalize(path.join(resolvedWorkspaceRoot, commandToken));
+  const rootWithSep = `${resolvedWorkspaceRoot}${path.sep}`;
+  if (candidate !== resolvedWorkspaceRoot && !candidate.startsWith(rootWithSep)) {
+    throw new Error('Command is outside the selected workspace.');
   }
 
   const baseName = path.basename(candidate).toLowerCase();
@@ -939,11 +1204,11 @@ async function getAvailablePythonRuntimes() {
 }
 
 function getSharedPythonProjectSnapshot() {
-  const resolvedVenvDir = resolveProjectVenvDir();
-  const interpreterPath = getInterpreterPathForVenv(resolvedVenvDir) || getVenvPython();
-  const pyprojectPath = path.join(ROOT_DIR, 'pyproject.toml');
-  const uvLockPath = path.join(ROOT_DIR, 'uv.lock');
-  const requirementsPath = path.join(ETL_DIR, 'requirements.txt');
+  const workspaceRoot = getActiveAnalysisRoot();
+  const { pyprojectPath, uvLockPath, requirementsPath, scriptsDir } = getWorkspaceDependencySourcePaths(workspaceRoot);
+  const resolvedVenvDir = resolveProjectVenvDir(workspaceRoot);
+  const interpreterPath = getInterpreterPathForVenv(resolvedVenvDir)
+    || (isInternalWorkspacePath(workspaceRoot) ? getVenvPython() : null);
 
   let requirementPackages = [];
   if (fs.existsSync(requirementsPath)) {
@@ -983,9 +1248,10 @@ function getSharedPythonProjectSnapshot() {
     .filter((p) => { const n = parseRequirementName(p); return n && !reqNameSet.has(n); });
 
   return {
+    workspace: buildWorkspaceDescriptor(workspaceRoot),
     paths: {
-      projectRoot: ROOT_DIR,
-      scriptsDir: SCRIPTS_DIR,
+      projectRoot: workspaceRoot,
+      scriptsDir: fs.existsSync(scriptsDir) ? scriptsDir : null,
       venvDir: resolvedVenvDir,
       interpreterPath: interpreterPath || null,
       requirementsPath: fs.existsSync(requirementsPath) ? requirementsPath : null,
@@ -1122,24 +1388,29 @@ function getDirectorySize(targetDir) {
   return total;
 }
 
-function readVenvMetadata() {
+function readVenvMetadata(workspacePath = getActiveWorkspacePath()) {
   try {
-    return readMigratedJson(VENV_METADATA_PATH, LEGACY_VENV_METADATA_PATHS, null);
+    return readMigratedJson(
+      getActiveVenvMetadataPath(workspacePath),
+      getInternalLegacyPaths(LEGACY_VENV_METADATA_PATHS, workspacePath),
+      null
+    );
   } catch {
     return null;
   }
 }
 
-function writeVenvMetadata(metadata) {
+function writeVenvMetadata(metadata, workspacePath = getActiveWorkspacePath()) {
   try {
-    writeJsonAtomic(VENV_METADATA_PATH, metadata);
+    writeJsonAtomic(getActiveVenvMetadataPath(workspacePath), metadata);
   } catch {}
 }
 
-function deleteVenvMetadata() {
+function deleteVenvMetadata(workspacePath = getActiveWorkspacePath()) {
   try {
-    if (fs.existsSync(VENV_METADATA_PATH)) {
-      fs.rmSync(VENV_METADATA_PATH, { force: true });
+    const metadataPath = getActiveVenvMetadataPath(workspacePath);
+    if (fs.existsSync(metadataPath)) {
+      fs.rmSync(metadataPath, { force: true });
     }
   } catch {}
 }
@@ -1240,13 +1511,16 @@ async function getVirtualEnvironmentDetails(shared) {
 
   let syncStatus = 'Not available';
   const hasDependencySource = shared.files.hasRequirements || shared.files.hasPyproject;
+  const pythonSignalsDetected = hasDependencySource || venvDetected;
   const sourceLabel = shared.files.hasRequirements && shared.files.hasPyproject
     ? 'requirements.txt + pyproject.toml'
     : shared.files.hasPyproject
-      ? 'pyproject.toml'
-      : 'requirements.txt';
+        ? 'pyproject.toml'
+        : 'requirements.txt';
 
-  if (!venvDetected) {
+  if (!pythonSignalsDetected) {
+    syncStatus = 'No Python project signals yet';
+  } else if (!venvDetected) {
     syncStatus = 'Environment missing';
   } else if (!hasDependencySource) {
     syncStatus = 'No dependency source';
@@ -1263,6 +1537,9 @@ async function getVirtualEnvironmentDetails(shared) {
   }
 
   const warnings = [];
+  if (!pythonSignalsDetected) {
+    warnings.push('No pyproject.toml, requirements.txt, or .venv detected in this workspace.');
+  }
   if (!venvDetected) {
     warnings.push('Environment folder is missing.');
   }
@@ -1427,6 +1704,7 @@ ipcMain.handle('python:dependency-summary', async () => {
 ipcMain.handle('python:create-venv', async (event, payload) => {
   try {
     const shared = getSharedPythonProjectSnapshot();
+    const workspaceRoot = shared.paths.projectRoot || getActiveAnalysisRoot();
     const targetDir = shared.paths.venvDir;
     const requestedRuntimePath = payload?.runtimePath ? path.normalize(String(payload.runtimePath)) : null;
     const requestedRuntimeVersion = payload?.runtimeVersion ? String(payload.runtimeVersion) : null;
@@ -1460,7 +1738,7 @@ ipcMain.handle('python:create-venv', async (event, payload) => {
       result = await runCommandCapture('uv', args, {
         source: 'action',
         label: 'Create virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
       });
     } else {
       const pythonCommand = requestedRuntimePath || await findPython();
@@ -1471,7 +1749,7 @@ ipcMain.handle('python:create-venv', async (event, payload) => {
       result = await runCommandCapture(pythonCommand, ['-m', 'venv', targetDir], {
         source: 'action',
         label: 'Create virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
       });
     }
 
@@ -1502,6 +1780,7 @@ ipcMain.handle('python:create-venv', async (event, payload) => {
 ipcMain.handle('python:rebuild-venv', async (event, payload) => {
   try {
     const shared = getSharedPythonProjectSnapshot();
+    const workspaceRoot = shared.paths.projectRoot || getActiveAnalysisRoot();
     const targetDir = shared.paths.venvDir;
     const startedAt = Date.now();
     const requestedRuntimePath = payload?.runtimePath ? path.normalize(String(payload.runtimePath)) : null;
@@ -1512,7 +1791,7 @@ ipcMain.handle('python:rebuild-venv', async (event, payload) => {
       appendPythonCommandLog({
         source: 'action',
         label: 'Rebuild virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
         command: `remove ${targetDir}`,
         ok: true,
         code: 0,
@@ -1543,7 +1822,7 @@ ipcMain.handle('python:rebuild-venv', async (event, payload) => {
       result = await runCommandCapture('uv', args, {
         source: 'action',
         label: 'Rebuild virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
       });
     } else {
       const pythonCommand = requestedRuntimePath || await findPython();
@@ -1554,7 +1833,7 @@ ipcMain.handle('python:rebuild-venv', async (event, payload) => {
       result = await runCommandCapture(pythonCommand, ['-m', 'venv', targetDir], {
         source: 'action',
         label: 'Rebuild virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
       });
     }
 
@@ -1585,6 +1864,7 @@ ipcMain.handle('python:rebuild-venv', async (event, payload) => {
 ipcMain.handle('python:delete-venv', async () => {
   try {
     const shared = getSharedPythonProjectSnapshot();
+    const workspaceRoot = shared.paths.projectRoot || getActiveAnalysisRoot();
     const targetDir = shared.paths.venvDir;
     const startedAt = Date.now();
 
@@ -1593,7 +1873,7 @@ ipcMain.handle('python:delete-venv', async () => {
       appendPythonCommandLog({
         source: 'action',
         label: 'Delete virtual environment',
-        cwd: ROOT_DIR,
+        cwd: workspaceRoot,
         command: `remove ${targetDir}`,
         ok: true,
         code: 0,
@@ -1623,6 +1903,7 @@ ipcMain.handle('python:delete-venv', async () => {
 ipcMain.handle('python:sync-venv', async () => {
   try {
     const shared = getSharedPythonProjectSnapshot();
+    const workspaceRoot = shared.paths.projectRoot || getActiveAnalysisRoot();
     if (!shared.files.hasVenv || !shared.paths.interpreterPath || !fs.existsSync(shared.paths.interpreterPath)) {
       return { ok: false, error: 'Virtual environment is missing, so it cannot be synchronized.' };
     }
@@ -1631,23 +1912,23 @@ ipcMain.handle('python:sync-venv', async () => {
     let method = null;
     const uvPath = await findCommandPath('uv');
 
-    if (uvPath && shared.files.hasPyproject) {
-      method = 'uv';
-      result = await runCommandCapture('uv', ['sync', '--active'], {
-        source: 'action',
-        label: 'Sync virtual environment',
-        cwd: ROOT_DIR,
-        env: {
-          VIRTUAL_ENV: shared.paths.venvDir,
-        },
+      if (uvPath && shared.files.hasPyproject) {
+        method = 'uv';
+        result = await runCommandCapture('uv', ['sync', '--active'], {
+          source: 'action',
+          label: 'Sync virtual environment',
+          cwd: workspaceRoot,
+          env: {
+            VIRTUAL_ENV: shared.paths.venvDir,
+          },
       });
     } else if (shared.files.hasRequirements) {
       method = 'pip';
-      result = await runCommandCapture(shared.paths.interpreterPath, ['-m', 'pip', 'install', '-r', shared.paths.requirementsPath], {
-        source: 'action',
-        label: 'Sync virtual environment',
-        cwd: ROOT_DIR,
-      });
+        result = await runCommandCapture(shared.paths.interpreterPath, ['-m', 'pip', 'install', '-r', shared.paths.requirementsPath], {
+          source: 'action',
+          label: 'Sync virtual environment',
+          cwd: workspaceRoot,
+        });
     } else {
       return { ok: false, error: 'No pyproject.toml or requirements.txt source is available for sync.' };
     }
@@ -1668,6 +1949,7 @@ ipcMain.handle('python:sync-venv', async () => {
 
 ipcMain.handle('python:secrets-status', async (event, payload) => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
     const expectedVars = Array.isArray(payload?.expectedVars)
       ? [...new Set(payload.expectedVars.map((item) => String(item || '').trim()).filter(Boolean))]
       : [];
@@ -1676,7 +1958,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     const MULTI_ENV_NAMES = ['.env.test', '.env.production', '.env.staging', '.env.development'];
     const ENV_LIKE = new Set(['.env', '.env.local', '.env.example', ...MULTI_ENV_NAMES]);
     const getFileMeta = (name) => {
-      const filePath = path.join(ROOT_DIR, name);
+      const filePath = path.join(workspaceRoot, name);
       const exists = fs.existsSync(filePath);
       if (!exists) return { exists: false, path: null, mtimeMs: null, varCount: null };
       const stat = fs.statSync(filePath);
@@ -1728,7 +2010,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
         try {
           // tformat appends a terminating newline after every entry so groups-of-3 split is safe.
           const proc = spawn('git', ['log', '--format=tformat:%H%n%ai%n%s', '--', fileName], {
-            cwd: ROOT_DIR,
+            cwd: workspaceRoot,
           });
           let out = '';
           proc.stdout.on('data', (d) => { out += d.toString(); });
@@ -1904,7 +2186,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
       const primaryFiles = ['.env', '.env.local'].filter((n) => files[n]?.exists);
       const allKeys = [...new Set(primaryFiles.flatMap((n) => extractEnvKeys(files[n].path)))];
       if (allKeys.length === 0) return { unused: [], scannedFiles: 0 };
-      const srcFiles = walkSrc(ROOT_DIR);
+      const srcFiles = walkSrc(workspaceRoot);
       const referenced = new Set();
       const JS_RE = /(?:process\.env|import\.meta\.env)\.([A-Z_][A-Z0-9_]*)/g;
       const PY_RE = /os\.(?:environ(?:\.get)?|getenv)\s*[\[(]['"]([A-Z_][A-Z0-9_]*)['"]/g;
@@ -1942,7 +2224,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
       { re: /['"`]Bearer\s+([A-Za-z0-9._~+/-]{20,})['"`]/i, label: 'Bearer token literal'      },
     ];
     const scanHardcodedSecrets = () => {
-      const srcFiles = walkSrc(ROOT_DIR);
+      const srcFiles = walkSrc(workspaceRoot);
       const findings = [];
       outer: for (const fp of srcFiles) {
         const base = path.basename(fp);
@@ -1958,7 +2240,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
             if (t.includes('process.env') || t.includes('import.meta.env') || t.includes('os.environ') || t.includes('os.getenv')) continue;
             for (const { re, label } of HC_PATTERNS) {
               if (re.test(line)) {
-                findings.push({ relPath: path.relative(ROOT_DIR, fp).replace(/\\/g, '/'), lineNumber: i + 1, label });
+                findings.push({ relPath: path.relative(workspaceRoot, fp).replace(/\\/g, '/'), lineNumber: i + 1, label });
                 break;
               }
             }
@@ -1992,9 +2274,9 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     // Looks for .husky/pre-commit, .pre-commit-config.yaml, and lefthook.yml,
     // then checks whether the contents reference a known secrets-scanning tool.
     const PRE_COMMIT_FILE_DEFS = [
-      { key: 'husky',     filePath: path.join(ROOT_DIR, '.husky', 'pre-commit') },
-      { key: 'precommit', filePath: path.join(ROOT_DIR, '.pre-commit-config.yaml') },
-      { key: 'lefthook',  filePath: path.join(ROOT_DIR, 'lefthook.yml') },
+      { key: 'husky',     filePath: path.join(workspaceRoot, '.husky', 'pre-commit') },
+      { key: 'precommit', filePath: path.join(workspaceRoot, '.pre-commit-config.yaml') },
+      { key: 'lefthook',  filePath: path.join(workspaceRoot, 'lefthook.yml') },
     ];
     const SECRETS_SCAN_RE = /trufflehog|gitleaks|detect[_-]secrets|secretlint|talisman|git[_-]secrets/i;
 
@@ -2024,12 +2306,12 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     // Read package.json deps once so each def can also detect via SDK presence
     let _pkgDeps = {};
     try {
-      const _pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
+      const _pkg = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
       _pkgDeps = { ...(_pkg.dependencies || {}), ...(_pkg.devDependencies || {}) };
     } catch { /* no package.json or parse error — skip pkg check */ }
 
     const secretsManagers = SECRETS_MANAGER_DEFS.map(({ key, file, pkg, label, description }) => {
-      const fileDetected = fs.existsSync(path.join(ROOT_DIR, file));
+      const fileDetected = fs.existsSync(path.join(workspaceRoot, file));
       const pkgDetected  = pkg ? (pkg in _pkgDeps) : false;
       return {
         key, label, description, file,
@@ -2043,7 +2325,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     // env_file: blocks and flags keys that exist there but not in .env.
     const scanDockerCompose = () => {
       const candidates = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
-      const composePath = candidates.map((n) => path.join(ROOT_DIR, n)).find((p) => fs.existsSync(p));
+      const composePath = candidates.map((n) => path.join(workspaceRoot, n)).find((p) => fs.existsSync(p));
       if (!composePath) return null;
       try {
         const lines = fs.readFileSync(composePath, 'utf8').split(/\r?\n/);
@@ -2094,7 +2376,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     // Walks .github/workflows/*.yml and extracts ${{ secrets.NAME }} references,
     // then flags any that are absent from .env.example (the documented set).
     const scanGitHubActionsSecrets = () => {
-      const workflowsDir = path.join(ROOT_DIR, '.github', 'workflows');
+      const workflowsDir = path.join(workspaceRoot, '.github', 'workflows');
       if (!fs.existsSync(workflowsDir)) return null;
       try {
         const workflowFiles = fs.readdirSync(workflowsDir)
@@ -2139,7 +2421,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
       // .npmrc — look for _authToken lines
       const NPMRC_RE = /^(?:\/\/[^:=\s]+:)?_authToken\s*=\s*(.+)/;
       const npmrcPaths = [
-        { file: path.join(ROOT_DIR, '.npmrc'),       label: '.npmrc (project)' },
+        { file: path.join(workspaceRoot, '.npmrc'),       label: '.npmrc (project)' },
         { file: path.join(homeDir,  '.npmrc'),       label: '.npmrc (global)'  },
       ];
       for (const { file: fp, label } of npmrcPaths) {
@@ -2157,7 +2439,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
 
       // .pypirc — look for password= inside [pypi] / [testpypi] sections
       const pypircPaths = [
-        { file: path.join(ROOT_DIR, '.pypirc'), label: '.pypirc (project)' },
+        { file: path.join(workspaceRoot, '.pypirc'), label: '.pypirc (project)' },
         { file: path.join(homeDir,  '.pypirc'), label: '.pypirc (global)'  },
       ];
       for (const { file: fp, label } of pypircPaths) {
@@ -2187,7 +2469,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
       const findings = [];
       const SSH_NAMES = new Set(['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519']);
       const KEY_EXTS  = new Set(['.pem', '.p12', '.pfx', '.key', '.p8']);
-      const SCAN_DIRS = ['', 'certs', 'cert', 'keys', 'ssl', '.ssh', 'secrets'].map((d) => path.join(ROOT_DIR, d));
+      const SCAN_DIRS = ['', 'certs', 'cert', 'keys', 'ssl', '.ssh', 'secrets'].map((d) => path.join(workspaceRoot, d));
 
       for (const dir of SCAN_DIRS) {
         if (!fs.existsSync(dir)) continue;
@@ -2197,7 +2479,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
             const name = entry.name;
             const ext  = path.extname(name).toLowerCase();
             if (!SSH_NAMES.has(name) && !KEY_EXTS.has(ext)) continue;
-            const relPath = path.relative(ROOT_DIR, path.join(dir, name)).replace(/\\/g, '/');
+            const relPath = path.relative(workspaceRoot, path.join(dir, name)).replace(/\\/g, '/');
             const type =
               SSH_NAMES.has(name)        ? 'SSH private key'     :
               ext === '.pem'             ? 'PEM certificate/key' :
@@ -2271,7 +2553,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
     // so that newly-written keys are detected without an app restart.
     const envFileVars = new Set();
     for (const ef of ['.env', '.env.local']) {
-      const efPath = path.join(ROOT_DIR, ef);
+      const efPath = path.join(workspaceRoot, ef);
       if (fs.existsSync(efPath)) {
         for (const line of fs.readFileSync(efPath, 'utf8').split(/\r?\n/)) {
           const t = line.trim();
@@ -2320,7 +2602,7 @@ ipcMain.handle('python:secrets-status', async (event, payload) => {
 
 ipcMain.handle('python:read-project-config', async () => {
   try {
-    return { ok: true, config: readPythonProjectConfig() };
+    return { ok: true, config: readPythonProjectConfig(getActiveAnalysisRoot()) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -2328,7 +2610,9 @@ ipcMain.handle('python:read-project-config', async () => {
 
 ipcMain.handle('python:write-project-config', async (event, payload) => {
   try {
-    const current = readPythonProjectConfig();
+    const workspaceRoot = getActiveAnalysisRoot();
+    const current = readPythonProjectConfig(workspaceRoot);
+    const { pyprojectPath } = getWorkspaceDependencySourcePaths(workspaceRoot);
     const next = {
       metadata: {
         ...current.metadata,
@@ -2338,8 +2622,8 @@ ipcMain.handle('python:write-project-config', async (event, payload) => {
       groups: payload?.groups && typeof payload.groups === 'object' ? payload.groups : current.groups,
     };
 
-    fs.writeFileSync(PYPROJECT_PATH, buildPythonProjectToml(next), 'utf8');
-    return { ok: true, config: readPythonProjectConfig() };
+    fs.writeFileSync(pyprojectPath, buildPythonProjectToml(next, workspaceRoot), 'utf8');
+    return { ok: true, config: readPythonProjectConfig(workspaceRoot) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -2348,15 +2632,16 @@ ipcMain.handle('python:write-project-config', async (event, payload) => {
 ipcMain.handle('python:run-tool-command', async (event, { command }) => {
   const startedAt = Date.now();
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
     const tokens = tokenizeCommand(command);
     if (tokens.length === 0) {
       return { ok: false, error: 'No command was provided.' };
     }
 
-    const executable = resolveAllowedExecutable(tokens[0]);
+    const executable = resolveAllowedExecutable(tokens[0], workspaceRoot);
     const args = tokens.slice(1);
     const result = await runCommandCapture(executable, args, {
-      cwd: ROOT_DIR,
+      cwd: workspaceRoot,
       source: 'run',
       label: command,
     });
@@ -2415,7 +2700,7 @@ ipcMain.handle('python:read-command-log', async () => {
 ipcMain.handle('python:clear-command-log', async () => {
   try {
     PYTHON_COMMAND_LOG.length = 0;
-    try { writeJsonAtomic(COMMAND_LOG_PATH, []); } catch {}
+    try { writeJsonAtomic(getActiveCommandLogPath(), []); } catch {}
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -2433,7 +2718,7 @@ ipcMain.handle('python:read-run-history', async () => {
 
 ipcMain.handle('python:clear-run-history', async () => {
   try {
-    writeJsonAtomic(RUN_HISTORY_PATH, []);
+    writeJsonAtomic(getActiveRunHistoryPath(), []);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -2445,6 +2730,7 @@ ipcMain.handle('python:footer-status', async () => {
   try {
     const shared = getSharedPythonProjectSnapshot();
     const meta = readVenvMetadata();
+    const pythonSignalsDetected = shared.files.hasVenv || shared.files.hasPyproject || shared.files.hasRequirements;
 
     // Parse python version from metadata's createdWith field (e.g. "uv:3.12.3")
     let pythonVersion = null;
@@ -2468,6 +2754,9 @@ ipcMain.handle('python:footer-status', async () => {
         interpreterOk: !!(shared.paths.interpreterPath && fs.existsSync(shared.paths.interpreterPath)),
         lockfileExists: shared.files.hasUvLock,
         pythonVersion,
+        pythonSignalsDetected,
+        projectDetected: pythonSignalsDetected,
+        workspaceName: shared.workspace?.name || 'Workspace',
       },
       lastRun,
     };
@@ -2527,10 +2816,11 @@ ipcMain.handle('shell:open-file', async (event, targetPath) => {
 
 ipcMain.handle('python:fix-hygiene', async (event, payload) => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
     const { action } = payload || {};
-    const gitignorePath = path.join(ROOT_DIR, '.gitignore');
-    const envPath       = path.join(ROOT_DIR, '.env');
-    const examplePath   = path.join(ROOT_DIR, '.env.example');
+    const gitignorePath = path.join(workspaceRoot, '.gitignore');
+    const envPath       = path.join(workspaceRoot, '.env');
+    const examplePath   = path.join(workspaceRoot, '.env.example');
 
     if (action === 'addToGitignore') {
       const entry = String(payload.entry || '').trim();
@@ -2685,12 +2975,13 @@ ipcMain.handle('python:fix-hygiene', async (event, payload) => {
 // the project root are allowed.
 ipcMain.handle('python:read-env-file', async (event, payload) => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
     const ALLOWED = new Set(['.env', '.env.local', '.env.test', '.env.production', '.env.staging', '.env.development']);
     const requested = Array.isArray(payload?.files) ? payload.files : ['.env'];
     const result = {};
     for (const name of requested) {
       if (!ALLOWED.has(name)) { result[name] = []; continue; }
-      const fp = path.join(ROOT_DIR, name);
+      const fp = path.join(workspaceRoot, name);
       if (!fs.existsSync(fp)) { result[name] = []; continue; }
       const lines = fs.readFileSync(fp, 'utf8').split(/\r?\n/);
       const vars = [];
@@ -2716,10 +3007,11 @@ ipcMain.handle('python:read-env-file', async (event, payload) => {
 // Format: { "entries": [{ "ts": <epoch-ms>, "count": <number> }, ...] }  (max 50)
 ipcMain.handle('python:hygiene-history', async (event, payload) => {
   try {
+    const historyPath = getActiveHygieneHistoryPath();
     const { action, count } = payload || {};
 
     const readEntries = () => {
-      const payload = readMigratedJson(HYGIENE_HISTORY_PATH, LEGACY_HYGIENE_HISTORY_PATHS, { entries: [] });
+      const payload = readMigratedJson(historyPath, LEGACY_HYGIENE_HISTORY_PATHS, { entries: [] });
       return Array.isArray(payload?.entries) ? payload.entries : [];
     };
 
@@ -2727,7 +3019,7 @@ ipcMain.handle('python:hygiene-history', async (event, payload) => {
       let entries = readEntries();
       entries.push({ ts: Date.now(), count: Number(count) || 0 });
       if (entries.length > 50) entries = entries.slice(-50);
-      writeJsonAtomic(HYGIENE_HISTORY_PATH, { entries });
+      writeJsonAtomic(historyPath, { entries });
       return { ok: true, entries };
     }
 
@@ -2744,12 +3036,14 @@ ipcMain.handle('python:hygiene-history', async (event, payload) => {
 // ── Container Status ──────────────────────────────────────────────────────────
 ipcMain.handle('python:container-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Dockerfile scanner ────────────────────────────────────────────────
     const DOCKERFILE_DIRS = [
-      ROOT_DIR,
-      path.join(ROOT_DIR, 'docker'),
-      path.join(ROOT_DIR, 'deploy'),
-      path.join(ROOT_DIR, '.docker'),
+      workspaceRoot,
+      path.join(workspaceRoot, 'docker'),
+      path.join(workspaceRoot, 'deploy'),
+      path.join(workspaceRoot, '.docker'),
     ];
 
     function findDockerfiles() {
@@ -2768,7 +3062,7 @@ ipcMain.handle('python:container-status', async () => {
     function parseDockerfile(filePath) {
       let lines;
       try { lines = fs.readFileSync(filePath, 'utf8').split('\n'); } catch { return null; }
-      const relPath = path.relative(ROOT_DIR, filePath).replace(/\\/g, '/');
+      const relPath = workspaceRelative(filePath);
       let fromImages = [], hasUser = false, hasExpose = false, runCount = 0, stageCount = 0;
       for (const raw of lines) {
         const line = raw.trim();
@@ -2808,7 +3102,7 @@ ipcMain.handle('python:container-status', async () => {
     const CRITICAL_EXCLUSIONS = ['.env', '.git', 'node_modules', '*.log'];
 
     function scanDockerIgnore() {
-      const ignorePath = path.join(ROOT_DIR, '.dockerignore');
+      const ignorePath = path.join(workspaceRoot, '.dockerignore');
       if (!fs.existsSync(ignorePath)) return { exists: false, missingExclusions: CRITICAL_EXCLUSIONS };
       let lines;
       try {
@@ -2830,7 +3124,7 @@ ipcMain.handle('python:container-status', async () => {
         'docker-compose.yml', 'docker-compose.yaml',
         'docker-compose.dev.yml', 'docker-compose.prod.yml',
         'compose.yml', 'compose.yaml',
-      ].map(n => path.join(ROOT_DIR, n));
+      ].map(n => path.join(workspaceRoot, n));
       const composePath = composePaths.find(p => fs.existsSync(p));
       if (!composePath) return null;
 
@@ -2894,7 +3188,7 @@ ipcMain.handle('python:container-status', async () => {
       );
 
       return {
-        file: path.relative(ROOT_DIR, composePath).replace(/\\/g, '/'),
+        file: workspaceRelative(composePath),
         services: serviceList,
         serviceCount: serviceList.length,
         portConflicts,
@@ -2921,7 +3215,7 @@ ipcMain.handle('python:container-status', async () => {
     function parseK8sManifest(filePath) {
       let lines;
       try { lines = fs.readFileSync(filePath, 'utf8').split('\n'); } catch { return null; }
-      const relPath = path.relative(ROOT_DIR, filePath).replace(/\\/g, '/');
+      const relPath = workspaceRelative(filePath);
       let kind = null, name = null, namespace = null;
       for (const line of lines) {
         const t = line.trim();
@@ -2968,7 +3262,7 @@ ipcMain.handle('python:container-status', async () => {
     function scanK8sManifests() {
       const files = [];
       for (const dir of K8S_DIRS) {
-        const full = path.join(ROOT_DIR, dir);
+        const full = path.join(workspaceRoot, dir);
         if (fs.existsSync(full)) walkK8sDir(full, files);
       }
       if (files.length === 0) return null;
@@ -3019,6 +3313,7 @@ ipcMain.handle('python:container-status', async () => {
 ipcMain.handle('python:cicd-status', async () => {
   try {
     const { execSync } = require('child_process');
+    const workspaceRoot = getActiveAnalysisRoot();
 
     // ── Provider detection ────────────────────────────────────────────────
     const PROVIDERS = [
@@ -3033,13 +3328,13 @@ ipcMain.handle('python:cicd-status', async () => {
     ];
 
     const detectedProviders = PROVIDERS.map(p => {
-      const full = path.join(ROOT_DIR, p.file);
+      const full = path.join(workspaceRoot, p.file);
       const exists = p.dir ? fs.existsSync(full) && fs.statSync(full).isDirectory() : fs.existsSync(full);
       return { ...p, exists };
     });
 
     // ── GitHub Actions deep scan ──────────────────────────────────────────
-    const WORKFLOWS_DIR = path.join(ROOT_DIR, '.github', 'workflows');
+    const WORKFLOWS_DIR = path.join(workspaceRoot, '.github', 'workflows');
     const UNPINNED_RE   = /uses:\s*([^@\s]+)@(v\d[\w.-]*|main|master|latest)/;
     const SECRET_RE     = /\$\{\{\s*secrets\.(\w+)\s*\}\}/g;
     const TIMEOUT_RE    = /timeout-minutes\s*:/;
@@ -3126,7 +3421,7 @@ ipcMain.handle('python:cicd-status', async () => {
       }).filter(Boolean);
 
       // Cross-reference secrets against .env.example
-      const examplePath = path.join(ROOT_DIR, '.env.example');
+      const examplePath = path.join(workspaceRoot, '.env.example');
       let exampleKeys = [];
       if (fs.existsSync(examplePath)) {
         try {
@@ -3152,7 +3447,7 @@ ipcMain.handle('python:cicd-status', async () => {
 
     // ── GitLab CI scan ────────────────────────────────────────────────────
     function scanGitLabCI() {
-      const ciPath = path.join(ROOT_DIR, '.gitlab-ci.yml');
+      const ciPath = path.join(workspaceRoot, '.gitlab-ci.yml');
       if (!fs.existsSync(ciPath)) return null;
       let content;
       try { content = fs.readFileSync(ciPath, 'utf8'); } catch { return null; }
@@ -3190,18 +3485,18 @@ ipcMain.handle('python:cicd-status', async () => {
     // ── Deployment frequency (git log) ────────────────────────────────────
     function getDeploymentMetrics() {
       try {
-        const gitDir = path.join(ROOT_DIR, '.git');
+        const gitDir = path.join(workspaceRoot, '.git');
         if (!fs.existsSync(gitDir)) return null;
         // Commits to main/master in the last 30 days
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         const out = execSync(
-          `git -C "${ROOT_DIR}" log --oneline --since="${since}" --no-merges 2>nul || git -C "${ROOT_DIR}" log --oneline --since="${since}" --no-merges 2>/dev/null`,
+          `git -C "${workspaceRoot}" log --oneline --since="${since}" --no-merges 2>nul || git -C "${workspaceRoot}" log --oneline --since="${since}" --no-merges 2>/dev/null`,
           { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] }
         ).trim();
         const commits = out ? out.split('\n').filter(Boolean).length : 0;
         // Tags (releases)
         const tags = execSync(
-          `git -C "${ROOT_DIR}" tag --sort=-creatordate 2>nul || git -C "${ROOT_DIR}" tag --sort=-creatordate 2>/dev/null`,
+          `git -C "${workspaceRoot}" tag --sort=-creatordate 2>nul || git -C "${workspaceRoot}" tag --sort=-creatordate 2>/dev/null`,
           { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] }
         ).trim();
         const tagList = tags ? tags.split('\n').filter(Boolean).slice(0, 5) : [];
@@ -3238,9 +3533,11 @@ ipcMain.handle('python:cicd-status', async () => {
 // ── Monitoring Status ─────────────────────────────────────────────────────────
 ipcMain.handle('python:monitoring-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Read package.json deps ────────────────────────────────────────────
     function readPackageDeps() {
-      const pkgPath = path.join(ROOT_DIR, 'package.json');
+      const pkgPath = path.join(workspaceRoot, 'package.json');
       if (!fs.existsSync(pkgPath)) return {};
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -3249,8 +3546,8 @@ ipcMain.handle('python:monitoring-status', async () => {
     }
 
     function readPyDeps() {
-      const tomlPath = path.join(ROOT_DIR, 'pyproject.toml');
-      const reqPath  = path.join(ROOT_DIR, 'requirements.txt');
+      const tomlPath = path.join(workspaceRoot, 'pyproject.toml');
+      const reqPath  = path.join(workspaceRoot, 'requirements.txt');
       const deps = [];
       if (fs.existsSync(tomlPath)) {
         try {
@@ -3300,7 +3597,7 @@ ipcMain.handle('python:monitoring-status', async () => {
         try {
           const dirs = ['src', 'app', '.'];
           for (const d of dirs) {
-            const full = path.join(ROOT_DIR, d);
+            const full = path.join(workspaceRoot, d);
             if (!fs.existsSync(full)) continue;
             const files = fs.readdirSync(full).filter(f => f.endsWith('.py')).slice(0, 5);
             for (const f of files) {
@@ -3392,7 +3689,7 @@ ipcMain.handle('python:monitoring-status', async () => {
             if (HEALTH_RE.test(lines[i])) {
               const match = lines[i].match(HEALTH_RE);
               if (match) {
-                const relPath = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+                const relPath = workspaceRelative(full);
                 if (!found.find(f => f.path === relPath && f.endpoint === match[1])) {
                   found.push({ path: relPath, endpoint: match[1], line: i + 1 });
                 }
@@ -3404,7 +3701,7 @@ ipcMain.handle('python:monitoring-status', async () => {
     }
 
     const healthEndpoints = [];
-    walkForHealth(ROOT_DIR, healthEndpoints);
+    walkForHealth(workspaceRoot, healthEndpoints);
 
     // ── Alert rules detection ─────────────────────────────────────────────
     const ALERT_FILES = [
@@ -3425,7 +3722,7 @@ ipcMain.handle('python:monitoring-status', async () => {
 
     const detectedAlerts = ALERT_FILES
       .map(a => {
-        const full = path.join(ROOT_DIR, a.file);
+        const full = path.join(workspaceRoot, a.file);
         const exists = a.dir
           ? fs.existsSync(full) && fs.statSync(full).isDirectory()
           : fs.existsSync(full);
@@ -3463,13 +3760,15 @@ ipcMain.handle('python:monitoring-status', async () => {
 // ── Data Versioning Status ────────────────────────────────────────────────────
 ipcMain.handle('python:data-versioning-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Helpers ───────────────────────────────────────────────────────────
-    function exists(rel)    { return fs.existsSync(path.join(ROOT_DIR, rel)); }
-    function isDir(rel)     { try { return fs.statSync(path.join(ROOT_DIR, rel)).isDirectory(); } catch { return false; } }
-    function readText(rel)  { try { return fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8'); } catch { return ''; } }
+    function exists(rel)    { return fs.existsSync(path.join(workspaceRoot, rel)); }
+    function isDir(rel)     { try { return fs.statSync(path.join(workspaceRoot, rel)).isDirectory(); } catch { return false; } }
+    function readText(rel)  { try { return fs.readFileSync(path.join(workspaceRoot, rel), 'utf8'); } catch { return ''; } }
     function readPkgDeps() {
       try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
+        const pkg = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
         return { ...pkg.dependencies, ...pkg.devDependencies };
       } catch { return {}; }
     }
@@ -3521,11 +3820,11 @@ ipcMain.handle('python:data-versioning-status', async () => {
         const full = path.join(dir, e.name);
         if (e.isDirectory()) { walkDvcPointers(full, depth + 1); continue; }
         if (e.name.endsWith('.dvc')) {
-          dvcPointerFiles.push(path.relative(ROOT_DIR, full).replace(/\\/g, '/'));
+          dvcPointerFiles.push(workspaceRelative(full));
         }
       }
     }
-    if (hasDvcDir) walkDvcPointers(ROOT_DIR);
+    if (hasDvcDir) walkDvcPointers(workspaceRoot);
 
     const dvc = {
       found:        hasDvcDir || hasDvcYaml,
@@ -3555,7 +3854,7 @@ ipcMain.handle('python:data-versioning-status', async () => {
     // Also check for _delta_log directories (materialised Delta tables)
     const hasDeltaLog = isDir('_delta_log') || (() => {
       try {
-        const entries = fs.readdirSync(ROOT_DIR, { withFileTypes: true });
+        const entries = fs.readdirSync(workspaceRoot, { withFileTypes: true });
         return entries.some(e => e.isDirectory() && e.name === '_delta_log');
       } catch { return false; }
     })();
@@ -3600,17 +3899,17 @@ ipcMain.handle('python:data-versioning-status', async () => {
         if (LARGE_EXTS.has(ext)) {
           try {
             const size = fs.statSync(full).size;
-            largeModelFiles.push({ file: path.relative(ROOT_DIR, full).replace(/\\/g, '/'), size });
+            largeModelFiles.push({ file: workspaceRelative(full), size });
           } catch {}
         } else if (DATA_EXTS.has(ext)) {
           try {
             const size = fs.statSync(full).size;
-            largeDataFiles.push({ file: path.relative(ROOT_DIR, full).replace(/\\/g, '/'), size });
+            largeDataFiles.push({ file: workspaceRelative(full), size });
           } catch {}
         }
       }
     }
-    walkLargeFiles(ROOT_DIR);
+    walkLargeFiles(workspaceRoot);
 
     // Sort by size descending, cap at 10 each
     const fmtSize = (b) => b >= 1e9 ? `${(b/1e9).toFixed(1)} GB` : b >= 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1024).toFixed(0)} KB`;
@@ -3638,7 +3937,7 @@ ipcMain.handle('python:data-versioning-status', async () => {
     ];
     const detectedContracts = CONTRACT_FILES
       .map(c => {
-        const full = path.join(ROOT_DIR, c.file);
+        const full = path.join(workspaceRoot, c.file);
         const found = c.dir
           ? fs.existsSync(full) && fs.statSync(full).isDirectory()
           : fs.existsSync(full);
@@ -3659,11 +3958,11 @@ ipcMain.handle('python:data-versioning-status', async () => {
         const full = path.join(dir, e.name);
         if (e.isDirectory()) { walkSchemaFiles(full, depth + 1); continue; }
         if (schemaFileExts.includes(path.extname(e.name))) {
-          schemaFiles.push({ file: path.relative(ROOT_DIR, full).replace(/\\/g, '/'), type: path.extname(e.name).slice(1) });
+          schemaFiles.push({ file: workspaceRelative(full), type: path.extname(e.name).slice(1) });
         }
       }
     }
-    walkSchemaFiles(ROOT_DIR);
+    walkSchemaFiles(workspaceRoot);
 
     // ── Readiness score ───────────────────────────────────────────────────
     const scoreChecks = [
@@ -3697,10 +3996,12 @@ ipcMain.handle('python:data-versioning-status', async () => {
 // ── Model Registry Status ─────────────────────────────────────────────────────
 ipcMain.handle('python:model-registry-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Helpers ───────────────────────────────────────────────────────────
-    function exists(rel)   { return fs.existsSync(path.join(ROOT_DIR, rel)); }
-    function isDir(rel)    { try { return fs.statSync(path.join(ROOT_DIR, rel)).isDirectory(); } catch { return false; } }
-    function readText(rel) { try { return fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8'); } catch { return ''; } }
+    function exists(rel)   { return fs.existsSync(path.join(workspaceRoot, rel)); }
+    function isDir(rel)    { try { return fs.statSync(path.join(workspaceRoot, rel)).isDirectory(); } catch { return false; } }
+    function readText(rel) { try { return fs.readFileSync(path.join(workspaceRoot, rel), 'utf8'); } catch { return ''; } }
     function readPyDeps() {
       const deps = [];
       ['pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'setup.cfg', 'Pipfile'].forEach(f => {
@@ -3747,7 +4048,7 @@ ipcMain.handle('python:model-registry-status', async () => {
     const mlrunsFound = isDir('mlruns');
     const mlflowRegisteredModelsDir = isDir('mlruns/models') || (() => {
       try {
-        const mlrunsPath = path.join(ROOT_DIR, 'mlruns');
+        const mlrunsPath = path.join(workspaceRoot, 'mlruns');
         if (!fs.existsSync(mlrunsPath)) return false;
         // If any subdirectory has a RegisteredModels or models dir it's using the registry
         const entries = fs.readdirSync(mlrunsPath, { withFileTypes: true });
@@ -3775,14 +4076,14 @@ ipcMain.handle('python:model-registry-status', async () => {
       if (depth > 4 || tritonConfigs.length > 10) return;
       let entries;
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.venv', '__pycache__']);
+        const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.venv', '__pycache__']);
       for (const e of entries) {
         if (SKIP.has(e.name)) continue;
         if (e.isDirectory()) { walkTriton(path.join(dir, e.name), depth + 1); continue; }
-        if (e.name === 'config.pbtxt') tritonConfigs.push(path.relative(ROOT_DIR, path.join(dir, e.name)).replace(/\\/g, '/'));
+        if (e.name === 'config.pbtxt') tritonConfigs.push(workspaceRelative(path.join(dir, e.name)));
       }
     }
-    walkTriton(ROOT_DIR);
+    walkTriton(workspaceRoot);
 
     const detectedServing = SERVING
       .filter(s => hasPy(s.id) || (s.configFile && exists(s.configFile)))
@@ -3807,12 +4108,12 @@ ipcMain.handle('python:model-registry-status', async () => {
         if (MODEL_EXTS.has(path.extname(e.name).toLowerCase())) {
           try {
             const size = fs.statSync(full).size;
-            modelArtifacts.push({ file: path.relative(ROOT_DIR, full).replace(/\\/g, '/'), size });
+            modelArtifacts.push({ file: workspaceRelative(full), size });
           } catch {}
         }
       }
     }
-    walkArtifacts(ROOT_DIR);
+    walkArtifacts(workspaceRoot);
     modelArtifacts.sort((a, b) => b.size - a.size);
     const fmtSize = (b) => b >= 1e9 ? `${(b/1e9).toFixed(1)} GB` : b >= 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1024).toFixed(0)} KB`;
     const topArtifacts = modelArtifacts.slice(0, 12).map(f => ({ ...f, sizeLabel: fmtSize(f.size) }));
@@ -3860,7 +4161,7 @@ ipcMain.handle('python:model-registry-status', async () => {
         } catch {}
       }
     }
-    walkForSeed(ROOT_DIR);
+    walkForSeed(workspaceRoot);
 
     // Training script detection
     const TRAINING_SCRIPTS = ['train.py', 'training.py', 'fit.py', 'run_training.py', 'train.sh', 'train.ipynb'];
@@ -3901,10 +4202,12 @@ ipcMain.handle('python:model-registry-status', async () => {
 // ── Disaster Recovery Status ──────────────────────────────────────────────────
 ipcMain.handle('python:disaster-recovery-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Helpers ───────────────────────────────────────────────────────────
-    function exists(rel)    { return fs.existsSync(path.join(ROOT_DIR, rel)); }
-    function isDir(rel)     { try { return fs.statSync(path.join(ROOT_DIR, rel)).isDirectory(); } catch { return false; } }
-    function readText(rel)  { try { return fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8'); } catch { return ''; } }
+    function exists(rel)    { return fs.existsSync(path.join(workspaceRoot, rel)); }
+    function isDir(rel)     { try { return fs.statSync(path.join(workspaceRoot, rel)).isDirectory(); } catch { return false; } }
+    function readText(rel)  { try { return fs.readFileSync(path.join(workspaceRoot, rel), 'utf8'); } catch { return ''; } }
     function readPyDeps()   {
       const deps = [];
       ['pyproject.toml','requirements.txt','requirements-dev.txt','setup.cfg','Pipfile'].forEach(f => {
@@ -3941,7 +4244,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
     ];
     const detectedBackups = BACKUP_FILES
       .map(b => {
-        const full  = path.join(ROOT_DIR, b.file);
+        const full  = path.join(workspaceRoot, b.file);
         const found = b.dir
           ? fs.existsSync(full) && fs.statSync(full).isDirectory()
           : fs.existsSync(full);
@@ -3963,9 +4266,9 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
         if (e.isDirectory()) { walkForBackupScripts(full, depth + 1); continue; }
         if (!['.sh', '.bash', '.py', '.sql'].includes(path.extname(e.name).toLowerCase())) continue;
         try {
-          const content = fs.readFileSync(full, 'utf8');
+            const content = fs.readFileSync(full, 'utf8');
           if (BACKUP_CMDS.test(content)) {
-            const rel = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+            const rel = workspaceRelative(full);
             const match = content.match(BACKUP_CMDS);
             if (!backupScripts.find(s => s.file === rel)) {
               backupScripts.push({ file: rel, tool: match ? match[1].split(/\s/)[0] : 'unknown' });
@@ -3974,7 +4277,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
         } catch {}
       }
     }
-    walkForBackupScripts(ROOT_DIR);
+    walkForBackupScripts(workspaceRoot);
 
     // Velero via py dep or k8s manifest check
     const hasVelero = hasPy('velero') || detectedBackups.some(b => b.label.includes('Velero')) ||
@@ -3998,7 +4301,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
             }
           }
         }
-        walkVelero(ROOT_DIR);
+        walkVelero(workspaceRoot);
         return found;
       })();
 
@@ -4022,7 +4325,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
     ];
     const detectedRunbooks = RUNBOOK_FILES
       .map(r => {
-        const full  = path.join(ROOT_DIR, r.file);
+        const full  = path.join(workspaceRoot, r.file);
         const found = r.dir
           ? fs.existsSync(full) && fs.statSync(full).isDirectory()
           : fs.existsSync(full);
@@ -4060,7 +4363,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
         if (!['.yaml', '.yml', '.tf', '.hcl'].includes(path.extname(e.name).toLowerCase())) continue;
         try {
           const content = fs.readFileSync(full, 'utf8');
-          const rel     = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+          const rel     = workspaceRelative(full);
           if (K8S_HA_RE.test(content)) {
             const match  = content.match(/kind:\s*(\w+)/);
             const reason = content.match(K8S_HA_RE)?.[0]?.slice(0, 40) || 'HA config';
@@ -4074,7 +4377,7 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
         } catch {}
       }
     }
-    walkForHA(ROOT_DIR);
+    walkForHA(workspaceRoot);
 
     // nginx / haproxy configs
     const PROXY_FILES = ['nginx.conf', 'haproxy.cfg', 'haproxy.conf', 'nginx', 'traefik.yml', 'traefik.yaml'];
@@ -4107,13 +4410,13 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
           try {
             const content = fs.readFileSync(full, 'utf8');
             if (/kind:\s*(ChaosEngine|ChaosExperiment|ChaosResult)/i.test(content)) {
-              chaosManifests.push(path.relative(ROOT_DIR, full).replace(/\\/g, '/'));
+              chaosManifests.push(workspaceRelative(full));
             }
           } catch {}
         }
       }
     }
-    walkForChaos(ROOT_DIR);
+    walkForChaos(workspaceRoot);
 
     // ── Readiness score ───────────────────────────────────────────────────
     const hasBackup    = detectedBackups.length > 0 || backupScripts.length > 0 || hasVelero;
@@ -4149,10 +4452,12 @@ ipcMain.handle('python:disaster-recovery-status', async () => {
 // ── Audit Logging Status ──────────────────────────────────────────────────────
 ipcMain.handle('python:audit-logging-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Helpers ───────────────────────────────────────────────────────────
-    function exists(rel)    { return fs.existsSync(path.join(ROOT_DIR, rel)); }
-    function isDir(rel)     { try { return fs.statSync(path.join(ROOT_DIR, rel)).isDirectory(); } catch { return false; } }
-    function readText(rel)  { try { return fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8'); } catch { return ''; } }
+    function exists(rel)    { return fs.existsSync(path.join(workspaceRoot, rel)); }
+    function isDir(rel)     { try { return fs.statSync(path.join(workspaceRoot, rel)).isDirectory(); } catch { return false; } }
+    function readText(rel)  { try { return fs.readFileSync(path.join(workspaceRoot, rel), 'utf8'); } catch { return ''; } }
     function readPyDeps() {
       const deps = [];
       ['pyproject.toml','requirements.txt','requirements-dev.txt','setup.cfg','Pipfile'].forEach(f => {
@@ -4214,7 +4519,7 @@ ipcMain.handle('python:audit-logging-status', async () => {
         if (!SRC_EXTS.has(path.extname(e.name))) continue;
         try {
           const content = fs.readFileSync(full, 'utf8');
-          const rel     = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+          const rel     = workspaceRelative(full);
           const hasAuditCall = AUDIT_CALL_RE.test(content);
           const hasMutation  = DB_MUTATE_RE.test(content);
           if (hasAuditCall) auditCallFiles.push(rel);
@@ -4225,7 +4530,7 @@ ipcMain.handle('python:audit-logging-status', async () => {
         } catch {}
       }
     }
-    walkSource(ROOT_DIR);
+    walkSource(workspaceRoot);
 
     const mutationCoverage = mutationFiles.length > 0
       ? Math.round((mutationsWithAudit.length / mutationFiles.length) * 100)
@@ -4256,7 +4561,7 @@ ipcMain.handle('python:audit-logging-status', async () => {
     ];
     const detectedRetention = RETENTION_FILES
       .map(r => {
-        const full = path.join(ROOT_DIR, r.file);
+        const full = path.join(workspaceRoot, r.file);
         const found = r.dir
           ? fs.existsSync(full) && fs.statSync(full).isDirectory()
           : fs.existsSync(full);
@@ -4281,12 +4586,12 @@ ipcMain.handle('python:audit-logging-status', async () => {
         try {
           const c = fs.readFileSync(full, 'utf8');
           if (LOG_DRIVER_RE.test(c)) {
-            logDriverFiles.push(path.relative(ROOT_DIR, full).replace(/\\/g, '/'));
+            logDriverFiles.push(workspaceRelative(full));
           }
         } catch {}
       }
     }
-    walkForLogDriver(ROOT_DIR);
+    walkForLogDriver(workspaceRoot);
 
     // ── PII risk scanner ──────────────────────────────────────────────────
     // Look for log calls that pass potentially-PII objects/strings
@@ -4304,7 +4609,7 @@ ipcMain.handle('python:audit-logging-status', async () => {
         if (!SRC_EXTS.has(path.extname(e.name))) continue;
         try {
           const lines = fs.readFileSync(full, 'utf8').split('\n');
-          const rel   = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+          const rel   = workspaceRelative(full);
           for (let i = 0; i < lines.length; i++) {
             if (PII_LOG_RE.test(lines[i]) && !piiRisks.find(p => p.file === rel)) {
               const match = lines[i].match(PII_LOG_RE);
@@ -4314,7 +4619,7 @@ ipcMain.handle('python:audit-logging-status', async () => {
         } catch {}
       }
     }
-    walkForPII(ROOT_DIR);
+    walkForPII(workspaceRoot);
 
     // ── Compliance framework detection ────────────────────────────────────
     const COMPLIANCE_RE = {
@@ -4373,10 +4678,12 @@ ipcMain.handle('python:audit-logging-status', async () => {
 // ── Access Control Status ─────────────────────────────────────────────────────
 ipcMain.handle('python:access-control-status', async () => {
   try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceRelative = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
     // ── Helpers ───────────────────────────────────────────────────────────
-    function exists(rel)    { return fs.existsSync(path.join(ROOT_DIR, rel)); }
-    function isDir(rel)     { try { return fs.statSync(path.join(ROOT_DIR, rel)).isDirectory(); } catch { return false; } }
-    function readText(rel)  { try { return fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8'); } catch { return ''; } }
+    function exists(rel)    { return fs.existsSync(path.join(workspaceRoot, rel)); }
+    function isDir(rel)     { try { return fs.statSync(path.join(workspaceRoot, rel)).isDirectory(); } catch { return false; } }
+    function readText(rel)  { try { return fs.readFileSync(path.join(workspaceRoot, rel), 'utf8'); } catch { return ''; } }
     function readPyDeps() {
       const deps = [];
       ['pyproject.toml','requirements.txt','requirements-dev.txt','setup.cfg','Pipfile'].forEach(f => {
@@ -4417,7 +4724,7 @@ ipcMain.handle('python:access-control-status', async () => {
         const full = path.join(dir, e.name);
         if (e.isDirectory()) { walkRBAC(full, depth + 1); continue; }
         const ext = path.extname(e.name).toLowerCase();
-        const rel = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+        const rel = workspaceRelative(full);
 
         // Rego / OPA
         if (ext === '.rego') { opaFiles.push(rel); continue; }
@@ -4446,7 +4753,7 @@ ipcMain.handle('python:access-control-status', async () => {
         } catch {}
       }
     }
-    walkRBAC(ROOT_DIR);
+    walkRBAC(workspaceRoot);
 
     // Casbin / OPA in deps
     const hasCasbin = hasPy('casbin') || hasJs('casbin') || casbinFiles.length > 0;
@@ -4473,7 +4780,7 @@ ipcMain.handle('python:access-control-status', async () => {
           }
         }
       }
-      walkDjango(ROOT_DIR);
+      walkDjango(workspaceRoot);
       return found;
     })();
 
@@ -4563,7 +4870,7 @@ ipcMain.handle('python:access-control-status', async () => {
         if (!['.yaml', '.yml'].includes(path.extname(e.name))) continue;
         try {
           const content = fs.readFileSync(full, 'utf8');
-          const rel     = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+          const rel     = workspaceRelative(full);
           if (/kind:\s*ServiceAccount/i.test(content)) {
             const nameMatch = content.match(/name:\s*(\S+)/);
             serviceAccounts.push({ file: rel, name: nameMatch ? nameMatch[1] : 'unknown' });
@@ -4578,7 +4885,7 @@ ipcMain.handle('python:access-control-status', async () => {
         } catch {}
       }
     }
-    walkServiceAccounts(ROOT_DIR);
+    walkServiceAccounts(workspaceRoot);
 
     // ── Zero-trust / service mesh detection ──────────────────────────────
     const MESH_LIBS = [
@@ -4602,7 +4909,7 @@ ipcMain.handle('python:access-control-status', async () => {
         if (!['.yaml', '.yml'].includes(path.extname(e.name))) continue;
         try {
           const content = fs.readFileSync(full, 'utf8');
-          const rel     = path.relative(ROOT_DIR, full).replace(/\\/g, '/');
+          const rel     = workspaceRelative(full);
           if (/kind:\s*NetworkPolicy/i.test(content) && !networkPolicies.find(n => n === rel)) {
             networkPolicies.push(rel);
           }
@@ -4620,7 +4927,7 @@ ipcMain.handle('python:access-control-status', async () => {
         } catch {}
       }
     }
-    walkZeroTrust(ROOT_DIR);
+    walkZeroTrust(workspaceRoot);
 
     // cert-manager
     const hasCertManager = (() => {
@@ -4641,7 +4948,7 @@ ipcMain.handle('python:access-control-status', async () => {
           }
         }
       }
-      walkCert(ROOT_DIR);
+      walkCert(workspaceRoot);
       return found;
     })();
 
@@ -4791,12 +5098,20 @@ function setupHygieneWatcher(win) {
   if (hygieneWatcher) { try { hygieneWatcher.close(); } catch (_) {} hygieneWatcher = null; }
 
   try {
-    hygieneWatcher = fs.watch(ROOT_DIR, { persistent: false }, (eventType, filename) => {
+    const workspaceRoot = getActiveAnalysisRoot();
+    if (!fs.existsSync(workspaceRoot) || !fs.statSync(workspaceRoot).isDirectory()) return;
+    const workspaceInfo = buildWorkspaceDescriptor(workspaceRoot);
+    hygieneWatcher = fs.watch(workspaceRoot, { persistent: false }, (eventType, filename) => {
       if (!filename || !HYGIENE_WATCHED.has(filename)) return;
       clearTimeout(hygieneDebounceTimers[filename]);
       hygieneDebounceTimers[filename] = setTimeout(() => {
         if (!win.isDestroyed()) {
-          win.webContents.send('hygiene:file-changed', { file: filename, changedAt: Date.now() });
+          win.webContents.send('hygiene:file-changed', {
+            file: filename,
+            changedAt: Date.now(),
+            workspacePath: workspaceInfo.path,
+            workspaceId: workspaceInfo.id,
+          });
         }
       }, 600);
     });
@@ -4807,7 +5122,7 @@ function setupHygieneWatcher(win) {
 function createWindow() {
   const win = new BrowserWindow({
     width: 1400, height: 900, minWidth: 1000, minHeight: 420,
-    backgroundColor: '#0A0F1A', titleBarStyle: 'hiddenInset', frame: false,
+    backgroundColor: '#0A0F1A', title: APP_DISPLAY_NAME, titleBarStyle: 'hiddenInset', frame: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -4827,8 +5142,10 @@ function createWindow() {
     win.webContents.setZoomFactor(1);
     win.webContents.setVisualZoomLevelLimits(1, 1);
   });
+  mainWindow = win;
   setupHygieneWatcher(win);
   win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
     if (hygieneWatcher) { try { hygieneWatcher.close(); } catch (_) {} hygieneWatcher = null; }
   });
   if (isDev) { win.loadURL(DEV_SERVER_URL); }

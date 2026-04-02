@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportSettings: () => ipcRenderer.invoke('settings:export'),
   importSettings: () => ipcRenderer.invoke('settings:import'),
   resetSettings: () => ipcRenderer.invoke('settings:reset'),
+  getWorkspaceState: () => ipcRenderer.invoke('workspace:get-state'),
+  pickWorkspaceFolder: () => ipcRenderer.invoke('workspace:pick-folder'),
+  setActiveWorkspace: (workspacePath) => ipcRenderer.invoke('workspace:set-active', workspacePath),
+  useInternalWorkspace: () => ipcRenderer.invoke('workspace:use-internal'),
 
   // Development helpers
   readSourceSnippet: (payload) => ipcRenderer.invoke('dev:read-source-snippet', payload),
@@ -69,6 +73,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_, data) => cb(data);
     ipcRenderer.on('hygiene:file-changed', handler);
     return () => ipcRenderer.removeListener('hygiene:file-changed', handler);
+  },
+  onWorkspaceChanged: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('workspace:changed', handler);
+    return () => ipcRenderer.removeListener('workspace:changed', handler);
   },
   // PyMuPDF local parser server
   pymupdfStart:  () => ipcRenderer.invoke('parsers:pymupdf-start'),

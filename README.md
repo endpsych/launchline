@@ -119,14 +119,14 @@ From the repo root:
 If you need the manual fallback:
 
 ```powershell
-C:\Users\ender\AppData\Local\nvm\nvm.exe use 20.18.1
+C:\Users\ender\AppData\Local\nvm\nvm.exe use 24.14.1
 $env:Path = 'C:\nvm4w\nodejs;' + $env:Path
 C:\nvm4w\nodejs\npm.cmd start
 ```
 
 ## Runtime Notes
 
-- Node `20.18.1` is the intended version for local development.
+- Node `24.14.1` is the intended version for local development.
 - Python `3.13` has been the safer choice on this machine.
 - Python `3.14` previously hit an `onnxruntime` wheel incompatibility.
 - The app can boot without automatically creating the venv if the setup script is missing.

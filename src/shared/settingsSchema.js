@@ -262,7 +262,6 @@ const SETTINGS_DEFAULT = {
 };
 
 const LEGACY_DATASET_COMMANDS = new Set([
-  'uv run python scripts/etl/datasets.py catalog data/repo-readiness.db data/raw pipeline_log.json',
   'uv run python scripts/etl/datasets.py catalog data/launchline.db data/raw pipeline_log.json',
 ]);
 
@@ -295,12 +294,6 @@ function sanitizeLegacySettings(settings, options = {}) {
   const appDisplayName = options.appDisplayName || APP_DISPLAY_NAME_FALLBACK;
   const normalized = settings && typeof settings === 'object' ? settings : {};
 
-  const isLegacyRepoReadinessBrand =
-    normalized.company?.name === 'Repo Readiness'
-    || normalized.company?.namePrimary === 'Repo'
-    || normalized.company?.nameAccent === ' Readiness'
-    || normalized.company?.initials === 'RR';
-
   if (['E-commerce', 'Generic Product'].includes(normalized.company?.industry)) {
     normalized.company = {
       ...normalized.company,
@@ -308,7 +301,7 @@ function sanitizeLegacySettings(settings, options = {}) {
     };
   }
 
-  if (['AppCraft', 'Repo Readiness'].includes(normalized.company?.name) || isLegacyRepoReadinessBrand) {
+  if (normalized.company?.name === 'AppCraft') {
     normalized.company = {
       ...normalized.company,
       name: appDisplayName,
@@ -328,40 +321,11 @@ function sanitizeLegacySettings(settings, options = {}) {
     delete normalized.data.dbName;
   }
 
-  if (normalized.development?.vision === 'Repo Readiness is a focused Electron desktop app for Python environment management and production-readiness scanning.') {
-    normalized.development = {
-      ...normalized.development,
-      vision: `${appDisplayName} is a focused Electron desktop app for Python environment management and production-readiness scanning.`,
-    };
-  }
-
-  if (normalized.pythonTools?.environmentRegistry?.length) {
-    normalized.pythonTools = {
-      ...normalized.pythonTools,
-      environmentRegistry: normalized.pythonTools.environmentRegistry.map((entry) => (
-        entry?.purpose === 'Shared default environment for core Repo Readiness workflows.'
-          ? { ...entry, purpose: `Shared default environment for core ${appDisplayName} workflows.` }
-          : entry
-      )),
-    };
-  }
-
   if (normalized.pythonTools?.tasks?.length) {
     normalized.pythonTools = {
       ...normalized.pythonTools,
       tasks: normalized.pythonTools.tasks.filter((task) => (
         task?.id !== 'profile-data' && !LEGACY_DATASET_COMMANDS.has(task?.command)
-      )),
-    };
-  }
-
-  if (normalized.pythonTools?.secretChecklist?.length) {
-    normalized.pythonTools = {
-      ...normalized.pythonTools,
-      secretChecklist: normalized.pythonTools.secretChecklist.map((item) => (
-        item?.title === 'Keep secrets out of Repo Readiness settings and roadmap notes'
-          ? { ...item, title: `Keep secrets out of ${appDisplayName} settings and roadmap notes` }
-          : item
       )),
     };
   }
