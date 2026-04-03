@@ -3314,6 +3314,55 @@ ipcMain.handle('python:cicd-status', async () => {
   try {
     const { execSync } = require('child_process');
     const workspaceRoot = getActiveAnalysisRoot();
+    const workspaceEntries = (() => {
+      try {
+        return fs.readdirSync(workspaceRoot, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+    })();
+    const workspaceHasPath = (relativePath) => fs.existsSync(path.join(workspaceRoot, relativePath));
+    const workspaceHasTopLevelExtension = (extension) => workspaceEntries.some((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(extension));
+
+    function detectWorkspaceProfiles() {
+      const profiles = [];
+
+      if (workspaceHasPath('package.json')) profiles.push('Node');
+      if (workspaceHasPath('pyproject.toml') || workspaceHasPath('requirements.txt') || workspaceHasPath('requirements-dev.txt')) profiles.push('Python');
+      if (workspaceHasPath('go.mod')) profiles.push('Go');
+      if (workspaceHasPath('Cargo.toml')) profiles.push('Rust');
+
+      const hasRSignals = workspaceHasPath('DESCRIPTION')
+        || workspaceHasPath('renv.lock')
+        || workspaceEntries.some((entry) => entry.isFile() && entry.name.endsWith('.Rproj'));
+      if (hasRSignals) profiles.push('R');
+
+      const hasContainerSignals = workspaceHasPath('Dockerfile')
+        || ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'].some((candidate) => workspaceHasPath(candidate));
+      if (hasContainerSignals) profiles.push('Container-first');
+
+      const hasDataMlSignals = workspaceHasPath('notebooks')
+        || workspaceHasTopLevelExtension('.ipynb')
+        || workspaceHasPath('dvc.yaml')
+        || workspaceHasPath('dvc.lock')
+        || workspaceHasPath('mlruns')
+        || workspaceHasPath('wandb')
+        || workspaceHasPath('models');
+      if (hasDataMlSignals) profiles.push('Data/ML');
+
+      const uniqueProfiles = [...new Set(profiles)];
+      const label = uniqueProfiles.length === 0
+        ? 'Generic'
+        : uniqueProfiles.length === 1
+          ? uniqueProfiles[0]
+          : 'Polyglot';
+
+      return {
+        label,
+        profiles: uniqueProfiles,
+        isPolyglot: uniqueProfiles.length > 1,
+      };
+    }
 
     // ── Provider detection ────────────────────────────────────────────────
     const PROVIDERS = [
@@ -3335,7 +3384,7 @@ ipcMain.handle('python:cicd-status', async () => {
 
     // ── GitHub Actions deep scan ──────────────────────────────────────────
     const WORKFLOWS_DIR = path.join(workspaceRoot, '.github', 'workflows');
-    const UNPINNED_RE   = /uses:\s*([^@\s]+)@(v\d[\w.-]*|main|master|latest)/;
+    const UNPINNED_RE   = /uses:\s*([^@\s]+)@(main|master|latest)\b/;
     const SECRET_RE     = /\$\{\{\s*secrets\.(\w+)\s*\}\}/g;
     const TIMEOUT_RE    = /timeout-minutes\s*:/;
     const PERM_WIDE_RE  = /permissions\s*:\s*(write-all|admin)/;
@@ -3509,6 +3558,7 @@ ipcMain.handle('python:cicd-status', async () => {
     const gitlab    = scanGitLabCI();
     const metrics   = getDeploymentMetrics();
     const providers = detectedProviders;
+    const workspaceProfile = detectWorkspaceProfiles();
 
     // ── Readiness score ───────────────────────────────────────────────────
     const anyCI = providers.some(p => p.exists);
@@ -3524,7 +3574,1419 @@ ipcMain.handle('python:cicd-status', async () => {
     ];
     const passed = scoreChecks.filter(c => c.pass).length;
 
-    return { ok: true, providers, github, gitlab, metrics, score: { passed, total: scoreChecks.length, checks: scoreChecks } };
+    return { ok: true, providers, github, gitlab, metrics, workspaceProfile, score: { passed, total: scoreChecks.length, checks: scoreChecks } };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:cicd-add-provider', async (_event, providerId) => {
+  try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    if (!workspaceRoot || !fs.existsSync(workspaceRoot)) {
+      return { ok: false, error: 'Active workspace not found.' };
+    }
+
+    if (providerId !== 'github') {
+      return { ok: false, error: 'This provider scaffold is still a placeholder.' };
+    }
+
+    const relativeWorkflowPath = path.join('.github', 'workflows', 'ci.yml');
+    const workflowPath = path.join(workspaceRoot, relativeWorkflowPath);
+    const relativeToWorkspace = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
+    const readText = (targetPath) => {
+      try {
+        return fs.readFileSync(targetPath, 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    const toJobBlock = (jobId, jobName, bodyLines) => [
+      `  ${jobId}:`,
+      `    name: ${jobName}`,
+      ...bodyLines.map(line => `    ${line}`),
+    ].join('\n');
+    const setupStep = (name, uses, withLines = []) => {
+      const lines = [
+        `- name: ${name}`,
+        `  uses: ${uses}`,
+      ];
+      if (withLines.length > 0) {
+        lines.push('  with:');
+        withLines.forEach(line => lines.push(`    ${line}`));
+      }
+      return lines;
+    };
+    const runStep = (name, commands) => [
+      `- name: ${name}`,
+      '  run: |',
+      ...commands.map(command => `    ${command}`),
+    ];
+    const parsePythonVersion = (pyprojectText) => {
+      const requiresMatch = pyprojectText.match(/requires-python\s*=\s*["']([^"']+)["']/i);
+      if (!requiresMatch) return '3.12';
+      const versionMatch = requiresMatch[1].match(/(\d+\.\d+)/);
+      return versionMatch ? versionMatch[1] : '3.12';
+    };
+    const readPackageJson = () => {
+      const packageJsonPath = path.join(workspaceRoot, 'package.json');
+      if (!fs.existsSync(packageJsonPath)) return null;
+      try {
+        return JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      } catch {
+        return null;
+      }
+    };
+    const parseNodeVersion = (versionSpec) => {
+      if (!versionSpec) return '20';
+      const versionMatch = String(versionSpec).match(/(\d+(?:\.\d+)?)/);
+      return versionMatch ? versionMatch[1] : '20';
+    };
+    const detectNodeProfile = () => {
+      const packageJson = readPackageJson();
+      if (!packageJson) return null;
+
+      const packageManagerField = String(packageJson.packageManager || '');
+      const scripts = packageJson.scripts || {};
+      const hasPnpmLock = fs.existsSync(path.join(workspaceRoot, 'pnpm-lock.yaml'));
+      const hasYarnLock = fs.existsSync(path.join(workspaceRoot, 'yarn.lock'));
+      const hasNpmLock = fs.existsSync(path.join(workspaceRoot, 'package-lock.json'));
+
+      let packageManager = 'npm';
+      if (hasPnpmLock || packageManagerField.startsWith('pnpm@')) packageManager = 'pnpm';
+      else if (hasYarnLock || packageManagerField.startsWith('yarn@')) packageManager = 'yarn';
+
+      const lockfilePath = packageManager === 'pnpm'
+        ? path.join(workspaceRoot, 'pnpm-lock.yaml')
+        : packageManager === 'yarn'
+          ? path.join(workspaceRoot, 'yarn.lock')
+          : path.join(workspaceRoot, 'package-lock.json');
+
+      const installCommands = [];
+      if (packageManager !== 'npm') installCommands.push('corepack enable');
+      if (packageManager === 'pnpm') installCommands.push('pnpm install --frozen-lockfile');
+      else if (packageManager === 'yarn') installCommands.push('yarn install --frozen-lockfile');
+      else if (hasNpmLock) installCommands.push('npm ci');
+      else installCommands.push('npm install');
+
+      const runCommand = (scriptName) => {
+        if (packageManager === 'yarn') return `yarn ${scriptName}`;
+        return `${packageManager} run ${scriptName}`;
+      };
+
+      const checks = [];
+      if (scripts.lint) checks.push({ name: 'Run lint', commands: [runCommand('lint')] });
+      if (scripts.typecheck) checks.push({ name: 'Run typecheck', commands: [runCommand('typecheck')] });
+      if (scripts.test) checks.push({ name: 'Run tests', commands: [runCommand('test')] });
+      if (scripts.build) checks.push({ name: 'Run build', commands: [runCommand('build')] });
+      if (checks.length === 0) {
+        checks.push({
+          name: 'Review next Node checks',
+          commands: ['echo "No lint, test, typecheck, or build scripts were detected in package.json yet."'],
+        });
+      }
+
+      return {
+        name: 'Node',
+        nodeVersion: parseNodeVersion(packageJson.engines?.node),
+        cache: packageManager,
+        cacheDependencyPath: fs.existsSync(lockfilePath) ? relativeToWorkspace(lockfilePath) : null,
+        installCommands,
+        checks,
+      };
+    };
+    const detectPythonProfile = () => {
+      const pyprojectPath = path.join(workspaceRoot, 'pyproject.toml');
+      const requirementsPath = path.join(workspaceRoot, 'requirements.txt');
+      const requirementsDevPath = path.join(workspaceRoot, 'requirements-dev.txt');
+      const uvLockPath = path.join(workspaceRoot, 'uv.lock');
+      const pyprojectText = readText(pyprojectPath);
+      const requirementsText = readText(requirementsPath);
+      const requirementsDevText = readText(requirementsDevPath);
+
+      const hasPyproject = Boolean(pyprojectText);
+      const hasRequirements = Boolean(requirementsText);
+      if (!hasPyproject && !hasRequirements) return null;
+
+      const combinedPythonText = `${pyprojectText}\n${requirementsText}\n${requirementsDevText}`;
+      const usesUv = fs.existsSync(uvLockPath) || /\[tool\.uv/i.test(pyprojectText);
+      const hasPytest = /\bpytest\b/i.test(combinedPythonText) || fs.existsSync(path.join(workspaceRoot, 'pytest.ini')) || /\[tool\.pytest/i.test(pyprojectText);
+      const hasRuff = /\bruff\b/i.test(combinedPythonText) || /\[tool\.ruff/i.test(pyprojectText) || fs.existsSync(path.join(workspaceRoot, 'ruff.toml')) || fs.existsSync(path.join(workspaceRoot, '.ruff.toml'));
+      const pythonVersion = parsePythonVersion(pyprojectText);
+
+      const installCommands = [];
+      const checkCommands = [];
+
+      if (usesUv) {
+        if (hasPyproject) {
+          installCommands.push('uv sync');
+        } else {
+          installCommands.push('uv pip install -r requirements.txt');
+          if (fs.existsSync(requirementsDevPath)) installCommands.push('uv pip install -r requirements-dev.txt');
+        }
+      } else {
+        installCommands.push('python -m pip install --upgrade pip');
+        if (hasRequirements) {
+          installCommands.push('python -m pip install -r requirements.txt');
+          if (fs.existsSync(requirementsDevPath)) installCommands.push('python -m pip install -r requirements-dev.txt');
+        } else if (hasPyproject) {
+          installCommands.push('python -m pip install -e .');
+          const extraTools = [];
+          if (hasPytest) extraTools.push('pytest');
+          if (hasRuff) extraTools.push('ruff');
+          if (extraTools.length > 0) installCommands.push(`python -m pip install ${extraTools.join(' ')}`);
+        }
+      }
+
+      if (hasRuff) {
+        checkCommands.push({
+          name: 'Run Ruff',
+          commands: [usesUv ? 'uv run ruff check .' : 'python -m ruff check .'],
+        });
+      }
+      if (hasPytest) {
+        checkCommands.push({
+          name: 'Run tests',
+          commands: [usesUv ? 'uv run pytest' : 'python -m pytest'],
+        });
+      }
+      if (checkCommands.length === 0) {
+        checkCommands.push({
+          name: 'Review next Python checks',
+          commands: ['echo "No pytest or Ruff configuration was detected yet. Add your preferred checks here."'],
+        });
+      }
+
+      return {
+        name: 'Python',
+        pythonVersion,
+        usesUv,
+        installCommands,
+        checks: checkCommands,
+      };
+    };
+    const workspaceEntries = (() => {
+      try {
+        return fs.readdirSync(workspaceRoot, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+    })();
+    const workspaceHasTopLevelExtension = (extension) => workspaceEntries.some((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(extension));
+    const workspaceHasPath = (relativePath) => fs.existsSync(path.join(workspaceRoot, relativePath));
+    const detectGoProfile = () => {
+      if (!workspaceHasPath('go.mod')) return null;
+      return {
+        name: 'Go',
+        checks: [
+          { name: 'Run go vet', commands: ['go vet ./...'] },
+          { name: 'Run tests', commands: ['go test ./...'] },
+        ],
+      };
+    };
+    const detectRustProfile = () => {
+      if (!workspaceHasPath('Cargo.toml')) return null;
+      return {
+        name: 'Rust',
+        checks: [
+          { name: 'Run cargo check', commands: ['cargo check --all-targets'] },
+          { name: 'Run tests', commands: ['cargo test --all-targets'] },
+        ],
+      };
+    };
+    const detectRProfile = () => {
+      const hasDescription = workspaceHasPath('DESCRIPTION');
+      const hasRenv = workspaceHasPath('renv.lock');
+      const hasRproj = workspaceEntries.some((entry) => entry.isFile() && entry.name.endsWith('.Rproj'));
+      if (!hasDescription && !hasRenv && !hasRproj) return null;
+
+      const installCommands = [];
+      if (hasRenv) {
+        installCommands.push(`Rscript -e "install.packages('renv', repos='https://cloud.r-project.org'); renv::restore(prompt = FALSE)"`);
+      } else if (hasDescription) {
+        installCommands.push(`Rscript -e "install.packages('remotes', repos='https://cloud.r-project.org'); remotes::install_deps(dependencies = TRUE)"`);
+      } else {
+        installCommands.push(`Rscript -e "cat('No DESCRIPTION or renv.lock found; review package dependency installation manually.\\n')"`);
+      }
+
+      const hasTestthat = workspaceHasPath(path.join('tests', 'testthat')) || /\btestthat\b/i.test(readText(path.join(workspaceRoot, 'DESCRIPTION')));
+      const checks = hasTestthat
+        ? [{ name: 'Run tests', commands: [`Rscript -e "if (!requireNamespace('testthat', quietly = TRUE)) stop('testthat is not installed'); testthat::test_dir('tests/testthat')"`] }]
+        : [{ name: 'Review next R checks', commands: [`Rscript -e "cat('No testthat suite detected yet. Add your preferred R checks here.\\n')"`] }];
+
+      return {
+        name: 'R',
+        installCommands,
+        checks,
+      };
+    };
+    const detectContainerProfile = () => {
+      const composeFile = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
+        .find((candidate) => workspaceHasPath(candidate));
+      const hasDockerfile = workspaceHasPath('Dockerfile');
+      if (!hasDockerfile && !composeFile) return null;
+
+      const checks = [];
+      if (hasDockerfile) {
+        checks.push({
+          name: 'Build container image',
+          commands: ['docker build . --tag launchline-ci-image:latest'],
+        });
+      }
+      if (composeFile) {
+        checks.push({
+          name: 'Validate compose configuration',
+          commands: [`docker compose -f ${composeFile} config`],
+        });
+      }
+
+      return {
+        name: 'Container-first',
+        checks,
+      };
+    };
+    const detectDataMlProfile = (pythonProfile) => {
+      const hasNotebookDir = workspaceHasPath('notebooks');
+      const hasNotebookFiles = workspaceHasTopLevelExtension('.ipynb');
+      const hasDvc = workspaceHasPath('dvc.yaml') || workspaceHasPath('dvc.lock');
+      const hasExperimentArtifacts = workspaceHasPath('mlruns') || workspaceHasPath('wandb') || workspaceHasPath('models');
+      if (!hasNotebookDir && !hasNotebookFiles && !hasDvc && !hasExperimentArtifacts) return null;
+
+      const checks = [{
+        name: 'Compile Python sources',
+        commands: ['python -m compileall .'],
+      }];
+      if (hasNotebookDir || hasNotebookFiles) {
+        checks.push({
+          name: 'Review notebook automation',
+          commands: ['echo "Notebook assets detected. Add notebook execution or validation here."'],
+        });
+      }
+      if (hasDvc) {
+        checks.push({
+          name: 'Review data pipeline automation',
+          commands: ['echo "DVC pipeline detected. Add dvc status or repro checks here."'],
+        });
+      }
+      if (hasExperimentArtifacts) {
+        checks.push({
+          name: 'Review model artifact validation',
+          commands: ['echo "Model or experiment artifacts detected. Add validation steps here."'],
+        });
+      }
+
+      return {
+        name: 'Data/ML',
+        pythonVersion: pythonProfile?.pythonVersion || '3.12',
+        usesUv: pythonProfile?.usesUv || false,
+        installCommands: pythonProfile?.installCommands || ['python -m pip install --upgrade pip'],
+        checks,
+      };
+    };
+    const buildWorkflowTemplate = () => {
+      const nodeProfile = detectNodeProfile();
+      const pythonProfile = detectPythonProfile();
+      const goProfile = detectGoProfile();
+      const rustProfile = detectRustProfile();
+      const rProfile = detectRProfile();
+      const containerProfile = detectContainerProfile();
+      const dataMlProfile = detectDataMlProfile(pythonProfile);
+      const headerLines = [
+        'name: CI',
+        '',
+        'on:',
+        '  push:',
+        '  pull_request:',
+        '  workflow_dispatch:',
+        '',
+        'permissions:',
+        '  contents: read',
+        '',
+        'concurrency:',
+        '  group: ci-${{ github.workflow }}-${{ github.ref }}',
+        '  cancel-in-progress: true',
+        '',
+        'jobs:',
+      ];
+
+      const jobs = [];
+      const profileParts = [];
+
+      if (nodeProfile) {
+        profileParts.push(nodeProfile.name);
+        jobs.push({
+          slug: 'node',
+          title: 'Node checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up Node.js', 'actions/setup-node@v4', [
+              `node-version: '${nodeProfile.nodeVersion}'`,
+              ...(nodeProfile.cacheDependencyPath ? [`cache: '${nodeProfile.cache}'`] : []),
+              ...(nodeProfile.cacheDependencyPath ? [`cache-dependency-path: '${nodeProfile.cacheDependencyPath}'`] : []),
+            ]),
+            ...runStep('Install dependencies', nodeProfile.installCommands),
+            ...nodeProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (pythonProfile) {
+        profileParts.push(pythonProfile.name);
+        jobs.push({
+          slug: 'python',
+          title: 'Python checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up Python', 'actions/setup-python@v5', [
+              `python-version: '${pythonProfile.pythonVersion}'`,
+            ]),
+            ...(pythonProfile.usesUv ? setupStep('Set up uv', 'astral-sh/setup-uv@v6') : []),
+            ...runStep('Install dependencies', pythonProfile.installCommands),
+            ...pythonProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (goProfile) {
+        profileParts.push(goProfile.name);
+        jobs.push({
+          slug: 'go',
+          title: 'Go checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up Go', 'actions/setup-go@v5', [
+              `go-version-file: 'go.mod'`,
+            ]),
+            ...goProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (rustProfile) {
+        profileParts.push(rustProfile.name);
+        jobs.push({
+          slug: 'rust',
+          title: 'Rust checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up Rust', 'dtolnay/rust-toolchain@stable'),
+            ...rustProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (rProfile) {
+        profileParts.push(rProfile.name);
+        jobs.push({
+          slug: 'r',
+          title: 'R checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up R', 'r-lib/actions/setup-r@v2'),
+            ...runStep('Install dependencies', rProfile.installCommands),
+            ...rProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (containerProfile) {
+        profileParts.push(containerProfile.name);
+        jobs.push({
+          slug: 'container',
+          title: 'Container checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...containerProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (dataMlProfile) {
+        profileParts.push(dataMlProfile.name);
+        jobs.push({
+          slug: 'data_ml',
+          title: 'Data / ML checks',
+          timeoutMinutes: 15,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...setupStep('Set up Python', 'actions/setup-python@v5', [
+              `python-version: '${dataMlProfile.pythonVersion}'`,
+            ]),
+            ...(dataMlProfile.usesUv ? setupStep('Set up uv', 'astral-sh/setup-uv@v6') : []),
+            ...runStep('Install dependencies', dataMlProfile.installCommands),
+            ...dataMlProfile.checks.flatMap((check) => runStep(check.name, check.commands)),
+          ],
+        });
+      }
+
+      if (jobs.length === 0) {
+        jobs.push({
+          slug: 'baseline',
+          title: 'Baseline checks',
+          timeoutMinutes: 10,
+          stepLines: [
+            ...setupStep('Check out repository', 'actions/checkout@v4'),
+            ...runStep('Review workspace checks', [
+              'echo "No Node, Python, Go, Rust, R, container, or Data/ML project signals were detected in this workspace."',
+              'echo "Replace this job with the lint, test, and build commands that fit this project."',
+            ]),
+          ],
+        });
+      }
+
+      const jobBlocks = jobs.map((job, index) => toJobBlock(
+        jobs.length === 1 ? 'validate' : `${job.slug}_checks`,
+        job.title,
+        [
+          'runs-on: ubuntu-latest',
+          `timeout-minutes: ${job.timeoutMinutes}`,
+          'steps:',
+          ...job.stepLines.map((line) => `  ${line}`),
+        ],
+      ));
+
+      const uniqueProfiles = [...new Set(profileParts)];
+      const profileLabel = uniqueProfiles.length === 0
+        ? 'generic'
+        : uniqueProfiles.length === 1
+          ? uniqueProfiles[0]
+          : 'polyglot';
+      const profileComment = uniqueProfiles.length > 1
+        ? `# Generated by Launchline for a polyglot workspace (${uniqueProfiles.join(', ')}).`
+        : `# Generated by Launchline for a ${profileLabel} workspace.`;
+
+      return {
+        profileLabel,
+        workflowTemplate: [
+          profileComment,
+          ...headerLines,
+          ...jobBlocks,
+          '',
+        ].join('\n'),
+      };
+    };
+
+    fs.mkdirSync(path.dirname(workflowPath), { recursive: true });
+
+    if (fs.existsSync(workflowPath)) {
+      return {
+        ok: true,
+        created: false,
+        providerId,
+        path: workflowPath,
+        message: 'GitHub Actions is already configured for this workspace.',
+      };
+    }
+
+    const { workflowTemplate, profileLabel } = buildWorkflowTemplate();
+
+    fs.writeFileSync(workflowPath, workflowTemplate, 'utf8');
+
+    return {
+      ok: true,
+      created: true,
+      providerId,
+      path: workflowPath,
+      profile: profileLabel,
+      message: `GitHub Actions starter workflow created for a ${profileLabel} workspace.`,
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// ── LLM Operations Status ────────────────────────────────────────────────────
+ipcMain.handle('python:llm-ops-status', async () => {
+  try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const MAX_WALK_DEPTH = 4;
+    const MAX_FILE_COUNT = 320;
+    const MAX_TEXT_BYTES = 300_000;
+    const IGNORED_DIRS = new Set([
+      '.git',
+      'node_modules',
+      '.venv',
+      'venv',
+      '__pycache__',
+      'dist',
+      'build',
+      'coverage',
+      '.next',
+      '.turbo',
+      '.cache',
+      '.idea',
+      '.vscode',
+    ]);
+    const TEXT_EXTENSIONS = new Set([
+      '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+      '.py', '.ipynb',
+      '.md', '.txt',
+      '.json', '.jsonl',
+      '.yml', '.yaml', '.toml',
+      '.env', '.sample',
+      '.prompt', '.jinja', '.j2',
+      '.sql', '.graphql',
+      '.rb', '.go', '.rs', '.java', '.cs', '.php', '.r',
+    ]);
+    const SOURCE_EXTENSIONS = new Set([
+      '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+      '.py', '.rb', '.go', '.rs', '.java', '.cs', '.php', '.r',
+      '.ipynb', '.md', '.yml', '.yaml', '.toml', '.json',
+    ]);
+    const promptFilePattern = /(prompt|prompts|system|template|instructions?)/i;
+    const llmHintPattern = /\b(openai|anthropic|gemini|groq|ollama|azure[_-]?openai|llm|prompt|completion|embedding|rag|vector|chat model)\b/i;
+    const rel = (targetPath) => path.relative(workspaceRoot, targetPath).replace(/\\/g, '/');
+
+    const files = [];
+    const directories = [];
+    function walk(dir, depth = 0) {
+      if (depth > MAX_WALK_DEPTH || files.length >= MAX_FILE_COUNT) return;
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (files.length >= MAX_FILE_COUNT) break;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (IGNORED_DIRS.has(entry.name)) continue;
+          directories.push({
+            path: fullPath,
+            rel: rel(fullPath),
+            name: entry.name,
+          });
+          walk(fullPath, depth + 1);
+          continue;
+        }
+        files.push({
+          path: fullPath,
+          rel: rel(fullPath),
+          name: entry.name,
+          ext: path.extname(entry.name).toLowerCase(),
+        });
+      }
+    }
+    walk(workspaceRoot);
+
+    const textEntries = files
+      .filter((entry) => TEXT_EXTENSIONS.has(entry.ext) || ['Dockerfile', 'Jenkinsfile', 'Makefile'].includes(entry.name))
+      .map((entry) => {
+        try {
+          const stat = fs.statSync(entry.path);
+          if (stat.size > MAX_TEXT_BYTES) return null;
+          const content = fs.readFileSync(entry.path, 'utf8');
+          return {
+            ...entry,
+            content,
+            lower: content.toLowerCase(),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    const sourceEntries = textEntries.filter((entry) => SOURCE_EXTENSIONS.has(entry.ext) || ['Dockerfile', 'Jenkinsfile', 'Makefile'].includes(entry.name));
+    const dependencyTexts = [];
+    for (const candidate of ['package.json', 'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'uv.lock', 'Cargo.toml', 'go.mod', 'DESCRIPTION']) {
+      const fullPath = path.join(workspaceRoot, candidate);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        dependencyTexts.push(fs.readFileSync(fullPath, 'utf8'));
+      } catch {}
+    }
+    const envTexts = [];
+    for (const candidate of ['.env.example', '.env.sample', '.env.template']) {
+      const fullPath = path.join(workspaceRoot, candidate);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        envTexts.push(fs.readFileSync(fullPath, 'utf8'));
+      } catch {}
+    }
+    const dependencyText = dependencyTexts.join('\n').toLowerCase();
+    const envText = envTexts.join('\n').toLowerCase();
+    const sourceText = sourceEntries.map((entry) => entry.content).join('\n');
+    const lowerSourceText = sourceText.toLowerCase();
+
+    const providerDefs = [
+      {
+        id: 'openai',
+        label: 'OpenAI',
+        depPatterns: [/["']openai["']/i],
+        envPatterns: [/openai_api_key/i, /openai_org/i, /openai_project/i],
+        codePatterns: [/\bopenai\b/i, /\bnew\s+openai\b/i, /responses\.create/i, /chat\.completions/i],
+      },
+      {
+        id: 'anthropic',
+        label: 'Anthropic',
+        depPatterns: [/anthropic/i, /@anthropic-ai\/sdk/i],
+        envPatterns: [/anthropic_api_key/i],
+        codePatterns: [/\banthropic\b/i, /\bclaude\b/i],
+      },
+      {
+        id: 'gemini',
+        label: 'Gemini',
+        depPatterns: [/@google\/genai/i, /@google\/generative-ai/i, /google-generativeai/i],
+        envPatterns: [/google_api_key/i, /gemini/i],
+        codePatterns: [/\bgemini\b/i, /google\.generativeai/i],
+      },
+      {
+        id: 'azure-openai',
+        label: 'Azure OpenAI',
+        depPatterns: [/azure-openai/i],
+        envPatterns: [/azure_openai_api_key/i, /azure_openai_endpoint/i],
+        codePatterns: [/\bazureopenai\b/i, /azure[_-]?openai/i],
+      },
+      {
+        id: 'groq',
+        label: 'Groq',
+        depPatterns: [/\bgroq\b/i],
+        envPatterns: [/groq_api_key/i],
+        codePatterns: [/\bgroq\b/i],
+      },
+      {
+        id: 'grok',
+        label: 'Grok / xAI',
+        depPatterns: [/\bxai_sdk\b/i, /@ai-sdk\/xai/i, /\bxai\b/i],
+        envPatterns: [/xai_api_key/i, /\bgrok\b/i],
+        codePatterns: [/\bgrok[-\w.]*\b/i, /\bxai\b/i, /api\.x\.ai/i],
+      },
+      {
+        id: 'local',
+        label: 'Local Model Runner',
+        depPatterns: [/\bollama\b/i, /\bvllm\b/i, /llama\.cpp/i],
+        envPatterns: [/ollama/i, /lm[_-]?studio/i],
+        codePatterns: [/\bollama\b/i, /\bvllm\b/i, /lm\s*studio/i, /localhost:11434/i],
+      },
+    ];
+
+    const providers = providerDefs
+      .map((provider) => {
+        const sources = [];
+        if (provider.depPatterns.some((pattern) => pattern.test(dependencyText))) sources.push('dependency');
+        if (provider.envPatterns.some((pattern) => pattern.test(envText))) sources.push('env');
+        if (provider.codePatterns.some((pattern) => pattern.test(lowerSourceText))) sources.push('source');
+        return { ...provider, detected: sources.length > 0, sources };
+      })
+      .filter((provider) => provider.detected)
+      .map(({ id, label, sources }) => ({ id, label, sources }));
+
+    const promptFiles = files.filter((entry) => {
+      const matchesPath = promptFilePattern.test(entry.rel);
+      const promptExt = ['.md', '.txt', '.json', '.yaml', '.yml', '.prompt', '.jinja', '.j2'].includes(entry.ext);
+      return matchesPath && promptExt;
+    });
+    const dedicatedPromptDirs = [...new Set([
+      ...directories
+        .filter((entry) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(entry.name))
+        .map((entry) => entry.rel),
+      ...promptFiles
+        .map((entry) => entry.rel.split('/'))
+        .filter((segments) => segments.length > 1)
+        .map((segments) => segments.find((segment) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(segment)))
+        .filter(Boolean),
+    ])];
+    const promptTextEntries = textEntries.filter((entry) => promptFiles.some((candidate) => candidate.rel === entry.rel));
+    const systemPromptFiles = promptFiles.filter((entry) => /(system|instructions?)/i.test(entry.rel));
+    const versionedPromptFiles = promptFiles.filter((entry) => /\bv\d+\b|version/i.test(entry.rel));
+    const templatedPromptFiles = promptTextEntries.filter((entry) => /{{\s*[\w.]+\s*}}|{[\w.]+}|<[\w.-]+>/.test(entry.content));
+    const promptAssets = {
+      total: promptFiles.length,
+      files: promptFiles.slice(0, 12).map((entry) => entry.rel),
+      dedicatedDirs: dedicatedPromptDirs,
+      systemPromptFiles: systemPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      versionedFiles: versionedPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      templatedFiles: templatedPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      hasDedicatedPromptDir: dedicatedPromptDirs.length > 0,
+      separatedFromAppCode: dedicatedPromptDirs.length > 0,
+    };
+
+    const evalFiles = files.filter((entry) => /(eval|evaluation|benchmark|golden|rubric|judge|regression|prompt[-_. ]?test|test[-_. ]?cases?|fixtures?|expected|snapshots?)/i.test(entry.rel));
+    const evalText = textEntries.filter((entry) => evalFiles.some((candidate) => candidate.rel === entry.rel));
+    const evalDatasetFiles = evalFiles.filter((entry) =>
+      /(dataset|cases?|fixtures?|samples?|benchmarks?|prompts?|inputs?)/i.test(entry.rel)
+      || (
+        ['.json', '.jsonl', '.csv', '.tsv', '.yaml', '.yml', '.toml', '.txt', '.md'].includes(entry.ext)
+        && /(eval|benchmark|test|prompt)/i.test(entry.rel)
+      )
+    );
+    const goldenOutputFiles = evalFiles.filter((entry) => /(golden|expected|snapshot|reference[-_. ]?output|approved)/i.test(entry.rel));
+    const regressionFiles = evalFiles.filter((entry) =>
+      /(regression|benchmark|smoke[-_. ]?eval|quality[-_. ]?gate)/i.test(entry.rel)
+      || (
+        /\.(js|jsx|ts|tsx|py|sh|ps1|cjs|mjs)$/i.test(entry.rel)
+        && /(eval|benchmark|regression)/i.test(entry.rel)
+      )
+    );
+    const rubricFiles = evalFiles.filter((entry) =>
+      /(rubric|criteria|scorecard|grading[-_. ]?guide)/i.test(entry.rel)
+    );
+    const judgeFiles = evalFiles.filter((entry) =>
+      /(judge|grader|pairwise|arena)/i.test(entry.rel)
+    );
+    const evals = {
+      files: evalFiles.slice(0, 12).map((entry) => entry.rel),
+      datasets: evalDatasetFiles.slice(0, 8).map((entry) => entry.rel),
+      promptTests: evalFiles.filter((entry) => /(prompt[-_. ]?test|eval)/i.test(entry.rel)).slice(0, 8).map((entry) => entry.rel),
+      goldenOutputs: goldenOutputFiles.slice(0, 8).map((entry) => entry.rel),
+      regressionSignals: regressionFiles.slice(0, 8).map((entry) => entry.rel),
+      rubricAssets: [
+        ...rubricFiles.slice(0, 8).map((entry) => entry.rel),
+        ...evalText.filter((entry) => /\brubric\b|criteria|scorecard|grading guide/i.test(entry.lower)).slice(0, 8).map((entry) => entry.rel),
+      ].filter((value, index, array) => array.indexOf(value) === index).slice(0, 8),
+      judgeAssets: [
+        ...judgeFiles.slice(0, 8).map((entry) => entry.rel),
+        ...evalText.filter((entry) => /\bjudge\b|rubric|llm[- ]as[- ]judge|grader|pairwise/i.test(entry.lower)).slice(0, 8).map((entry) => entry.rel),
+      ].filter((value, index, array) => array.indexOf(value) === index).slice(0, 8),
+      scoreThresholdSignals: evalText.filter((entry) => /\bthreshold\b|score\s*[<>]=|pass[_ -]?rate/i.test(entry.lower)).slice(0, 8).map((entry) => entry.rel),
+    };
+
+    const structuredSignals = sourceEntries.filter((entry) => /\b(json_schema|response_format|withstructuredoutput|structured output|zod|pydantic|basemodel|json mode|schema)\b/i.test(entry.lower));
+    const moderationSignals = sourceEntries.filter((entry) => /\bmoderation\b|content filter|safety settings/i.test(entry.lower));
+    const injectionSignals = sourceEntries.filter((entry) => /prompt injection|jailbreak|sanitize.*prompt|strip.*instructions|allowlist|denylist/i.test(entry.lower));
+    const retryFallbackSignals = sourceEntries.filter((entry) => /\bretry\b|\bbackoff\b|fallback model|fallback to|parse failure/i.test(entry.lower) && llmHintPattern.test(entry.lower));
+    const validationSignals = sourceEntries.filter((entry) => /\b(zod|pydantic|ajv|jsonschema|instructor|guardrails)\b/i.test(entry.lower));
+    const guardrails = {
+      moderation: moderationSignals.slice(0, 8).map((entry) => entry.rel),
+      structuredOutputs: structuredSignals.slice(0, 10).map((entry) => entry.rel),
+      outputValidation: validationSignals.slice(0, 10).map((entry) => entry.rel),
+      promptInjectionHandling: injectionSignals.slice(0, 8).map((entry) => entry.rel),
+      retryOrFallback: retryFallbackSignals.slice(0, 8).map((entry) => entry.rel),
+    };
+
+    const retrievalSignals = sourceEntries.filter((entry) => /\b(retriev|rag|embedding|vector|chunk[_ -]?size|textsplitter|citation|source_documents)\b/i.test(entry.lower));
+    const vectorSignals = retrievalSignals.filter((entry) => /\b(pinecone|qdrant|weaviate|chroma|faiss|milvus|pgvector)\b/i.test(entry.lower));
+    const chunkSignals = retrievalSignals.filter((entry) => /\b(chunk[_ -]?size|chunk overlap|recursivecharactertextsplitter|textsplitter|split_documents)\b/i.test(entry.lower));
+    const citationSignals = retrievalSignals.filter((entry) => /\bcitation|source_documents|sources?\b/i.test(entry.lower));
+    const retrieval = {
+      vectorStores: vectorSignals.slice(0, 10).map((entry) => entry.rel),
+      embeddingSignals: retrievalSignals.filter((entry) => /\bembedding/i.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+      chunkingSignals: chunkSignals.slice(0, 10).map((entry) => entry.rel),
+      citationSignals: citationSignals.slice(0, 10).map((entry) => entry.rel),
+      retrievalTests: files.filter((entry) => /(retriev|rag)/i.test(entry.rel) && /(test|spec)/i.test(entry.rel)).slice(0, 8).map((entry) => entry.rel),
+    };
+
+    const observability = {
+      tokenUsage: sourceEntries.filter((entry) => /\b(prompt_tokens|completion_tokens|total_tokens|input_tokens|output_tokens|usage\.)\b/i.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+      costTracking: sourceEntries.filter((entry) => /\bcost\b|\bpricing\b|\busd\b/i.test(entry.lower) && llmHintPattern.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+      tracing: sourceEntries.filter((entry) => /\b(langfuse|langsmith|opentelemetry|trace[_ -]?id)\b/i.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+      metadataLogging: sourceEntries.filter((entry) => /\b(prompt[_ -]?id|request[_ -]?id|model[_ -]?version|latency|duration)\b/i.test(entry.lower) && llmHintPattern.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+      feedback: sourceEntries.filter((entry) => /\b(feedback|rating|thumbs up|thumbs_down|thumbsup|thumbsdown)\b/i.test(entry.lower)).slice(0, 10).map((entry) => entry.rel),
+    };
+
+    const featureDefinitions = [
+      { id: 'chat', label: 'Chat / Assistant', pattern: /\b(chat|assistant|conversation)\b/i },
+      { id: 'summarization', label: 'Summarization', pattern: /\b(summary|summari[sz]e)\b/i },
+      { id: 'extraction', label: 'Extraction', pattern: /\b(extract|structured extraction|parse document)\b/i },
+      { id: 'classification', label: 'Classification', pattern: /\b(classif(?:y|ication)|labeling)\b/i },
+      { id: 'retrieval', label: 'Search / RAG', pattern: /\b(rag|retriev|semantic search|vector search)\b/i },
+      { id: 'recommendation', label: 'Recommendations', pattern: /\b(recommend|suggestion)\b/i },
+      { id: 'agents', label: 'Agents / Tools', pattern: /\b(agent|tool call|function call|tools support)\b/i },
+      { id: 'evals', label: 'Evaluation Workflows', pattern: /\b(eval|benchmark|judge)\b/i },
+    ];
+    const featureBindings = featureDefinitions
+      .map((feature) => {
+        const hit = sourceEntries.find((entry) => llmHintPattern.test(entry.lower) && feature.pattern.test(entry.lower));
+        return hit ? { id: feature.id, label: feature.label, file: hit.rel } : null;
+      })
+      .filter(Boolean);
+
+    const scoreChecks = [
+      { id: 'providers', label: 'Provider integrations detected', pass: providers.length > 0 },
+      { id: 'prompt_assets', label: 'Prompt assets organized', pass: promptAssets.hasDedicatedPromptDir || promptAssets.total >= 2 },
+      { id: 'evals', label: 'Evaluation signals present', pass: evals.files.length > 0 },
+      { id: 'structured', label: 'Structured output signals present', pass: guardrails.structuredOutputs.length > 0 || guardrails.outputValidation.length > 0 },
+      { id: 'guardrails', label: 'Guardrail signals present', pass: guardrails.moderation.length > 0 || guardrails.promptInjectionHandling.length > 0 || guardrails.retryOrFallback.length > 0 },
+      { id: 'usage', label: 'Usage / observability signals present', pass: observability.tokenUsage.length > 0 || observability.metadataLogging.length > 0 || observability.tracing.length > 0 },
+      { id: 'bindings', label: 'LLM feature bindings identified', pass: featureBindings.length > 0 },
+    ];
+    const passed = scoreChecks.filter((check) => check.pass).length;
+
+    return {
+      ok: true,
+      providers,
+      promptAssets,
+      evals,
+      guardrails,
+      retrieval,
+      observability,
+      featureBindings,
+      score: {
+        passed,
+        total: scoreChecks.length,
+        checks: scoreChecks,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:llm-ops-read-prompt-asset', async (_event, payload = {}) => {
+  try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const relativePath = String(payload?.relativePath || '').trim().replace(/\\/g, '/');
+    if (!relativePath) {
+      return { ok: false, error: 'No prompt asset path was provided.' };
+    }
+
+    const resolvedPath = path.resolve(workspaceRoot, relativePath);
+    const workspaceRootWithSep = `${workspaceRoot}${path.sep}`;
+    if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRootWithSep)) {
+      return { ok: false, error: 'Prompt asset is outside the loaded workspace.' };
+    }
+    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+      return { ok: false, error: 'Prompt asset file not found.' };
+    }
+
+    const stat = fs.statSync(resolvedPath);
+    if (stat.size > 200_000) {
+      return { ok: false, error: 'Prompt asset is too large to load into the tester.' };
+    }
+
+    const content = fs.readFileSync(resolvedPath, 'utf8');
+    const baseName = path.basename(relativePath, path.extname(relativePath));
+    const suggestedTitle = baseName
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Workspace prompt';
+
+    return {
+      ok: true,
+      relativePath,
+      content,
+      title: suggestedTitle,
+      workspaceName: path.basename(workspaceRoot) || 'workspace',
+      loadedAt: Date.now(),
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:llm-ops-create-prompts-dir', async () => {
+  try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    if (!workspaceRoot || !fs.existsSync(workspaceRoot)) {
+      return { ok: false, error: 'Active workspace is unavailable.' };
+    }
+
+    const promptsDir = path.join(workspaceRoot, 'prompts');
+    const alreadyExisted = fs.existsSync(promptsDir);
+    if (!alreadyExisted) {
+      fs.mkdirSync(promptsDir, { recursive: true });
+    }
+
+    return {
+      ok: true,
+      alreadyExisted,
+      relativePath: path.relative(workspaceRoot, promptsDir).replace(/\\/g, '/'),
+      absolutePath: promptsDir,
+      message: alreadyExisted
+        ? 'The prompts/ directory already exists in the loaded workspace.'
+        : 'Created prompts/ in the loaded workspace.',
+    };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Unable to create prompts directory.' };
+  }
+});
+
+ipcMain.handle('python:llm-ops-read-eval-asset', async (_event, payload = {}) => {
+  try {
+    const workspaceRoot = getActiveAnalysisRoot();
+    const relativePath = String(payload?.relativePath || '').trim().replace(/\\/g, '/');
+    if (!relativePath) {
+      return { ok: false, error: 'No eval asset path was provided.' };
+    }
+
+    const resolvedPath = path.resolve(workspaceRoot, relativePath);
+    const workspaceRootWithSep = `${workspaceRoot}${path.sep}`;
+    if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRootWithSep)) {
+      return { ok: false, error: 'Eval asset is outside the loaded workspace.' };
+    }
+    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+      return { ok: false, error: 'Eval asset file not found.' };
+    }
+
+    const stat = fs.statSync(resolvedPath);
+    if (stat.size > 400_000) {
+      return { ok: false, error: 'Eval asset is too large to load in the eval runner.' };
+    }
+
+    const content = fs.readFileSync(resolvedPath, 'utf8');
+    const baseName = path.basename(relativePath, path.extname(relativePath));
+    const suggestedTitle = baseName
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Workspace eval set';
+
+    return {
+      ok: true,
+      relativePath,
+      content,
+      title: suggestedTitle,
+      workspaceName: path.basename(workspaceRoot) || 'workspace',
+      loadedAt: Date.now(),
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) => {
+  const http = require('http');
+  const https = require('https');
+
+  function requestJson(targetUrl, options = {}) {
+    return new Promise((resolve, reject) => {
+      let parsed;
+      try {
+        parsed = new URL(targetUrl);
+      } catch {
+        reject(new Error('Invalid provider URL.'));
+        return;
+      }
+
+      const client = parsed.protocol === 'http:' ? http : https;
+      const method = options.method || 'GET';
+      const headers = options.headers || {};
+      const body = options.body ? JSON.stringify(options.body) : null;
+
+      if (body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      if (body && !headers['Content-Length']) headers['Content-Length'] = Buffer.byteLength(body);
+
+      const req = client.request(parsed, { method, headers, timeout: Number(options.timeoutMs) || 20000 }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { raw += chunk; });
+        res.on('end', () => {
+          let data = raw;
+          try {
+            data = raw ? JSON.parse(raw) : {};
+          } catch {}
+
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              data,
+            });
+            return;
+          }
+
+          const message = typeof data === 'object'
+            ? data?.error?.message || data?.message || `Request failed with status ${res.statusCode}`
+            : `Request failed with status ${res.statusCode}`;
+          reject(new Error(message));
+        });
+      });
+
+      req.on('error', (err) => reject(err));
+      req.on('timeout', () => {
+        req.destroy(new Error('Connection timed out.'));
+      });
+
+      if (body) req.write(body);
+      req.end();
+    });
+  }
+
+  try {
+    const providerId = String(payload.providerId || '').trim();
+    const baseUrl = String(payload.baseUrl || '').trim();
+    const modelId = String(payload.modelId || '').trim();
+    const apiKey = String(payload.apiKey || '').trim();
+    const timeoutMs = Number(payload.timeoutMs) || 20000;
+
+    if (!providerId) {
+      return { ok: false, error: 'No provider selected.' };
+    }
+
+    if (!baseUrl) {
+      return { ok: false, error: 'Provider base URL is required.' };
+    }
+
+    if (!modelId) {
+      return { ok: false, error: 'Model ID is required.' };
+    }
+
+    const baseUrlNoSlash = baseUrl.replace(/\/+$/, '');
+
+    if (['openai', 'groq', 'grok', 'custom', 'local'].includes(providerId)) {
+      const headers = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      if (providerId === 'openai' && payload.organization) headers['OpenAI-Organization'] = String(payload.organization).trim();
+      if (providerId === 'openai' && payload.project) headers['OpenAI-Project'] = String(payload.project).trim();
+
+      let resolvedModelId = modelId;
+      try {
+        const modelResponse = await requestJson(`${baseUrlNoSlash}/models/${encodeURIComponent(modelId)}`, {
+          headers,
+          timeoutMs,
+        });
+        resolvedModelId = modelResponse?.data?.id || modelId;
+      } catch {
+        const chatProbe = await requestJson(`${baseUrlNoSlash}/chat/completions`, {
+          method: 'POST',
+          headers,
+          timeoutMs,
+          body: {
+            model: modelId,
+            max_tokens: 16,
+            temperature: 0,
+            messages: [
+              { role: 'system', content: 'You are a minimal connectivity probe.' },
+              { role: 'user', content: 'Reply with: ok' },
+            ],
+          },
+        });
+        resolvedModelId = chatProbe?.data?.model || chatProbe?.data?.id || modelId;
+      }
+      return {
+        ok: true,
+        providerId,
+        validatedModel: resolvedModelId,
+        connectionStatus: 'connected',
+        checkedAt: Date.now(),
+        message: `Connected successfully and resolved model ${resolvedModelId}.`,
+      };
+    }
+
+    if (providerId === 'anthropic') {
+      if (!apiKey) {
+        return { ok: false, error: 'Anthropic API key is required for validation.' };
+      }
+      const response = await requestJson(`${baseUrlNoSlash}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        timeoutMs,
+        body: {
+          model: modelId,
+          max_tokens: 16,
+          messages: [
+            { role: 'user', content: 'Reply with exactly: ok' },
+          ],
+        },
+      });
+      return {
+        ok: true,
+        providerId,
+        validatedModel: response?.data?.model || modelId,
+        connectionStatus: 'connected',
+        checkedAt: Date.now(),
+        message: `Connected successfully to Anthropic using model ${response?.data?.model || modelId}.`,
+      };
+    }
+
+    if (providerId === 'gemini') {
+      if (!apiKey) {
+        return { ok: false, error: 'Gemini API key is required for validation.' };
+      }
+      const response = await requestJson(`${baseUrlNoSlash}/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        timeoutMs,
+        body: {
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: 'Reply with exactly: ok' }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 16,
+          },
+        },
+      });
+      return {
+        ok: true,
+        providerId,
+        validatedModel: response?.data?.modelVersion || modelId,
+        connectionStatus: 'connected',
+        checkedAt: Date.now(),
+        message: `Connected successfully to Gemini using model ${response?.data?.modelVersion || modelId}.`,
+      };
+    }
+
+    if (providerId === 'azure-openai') {
+      const azureApiKey = apiKey;
+      const apiVersion = String(payload.apiVersion || '2024-10-21').trim();
+      if (!azureApiKey) {
+        return { ok: false, error: 'Azure OpenAI API key is required for validation.' };
+      }
+      const listResponse = await requestJson(`${baseUrlNoSlash}/openai/models?api-version=${encodeURIComponent(apiVersion)}`, {
+        headers: {
+          'api-key': azureApiKey,
+        },
+        timeoutMs,
+      });
+
+      const models = Array.isArray(listResponse?.data?.data) ? listResponse.data.data : [];
+      const matched = models.find((model) => model.id === modelId || model.name === modelId || model.model === modelId);
+      return {
+        ok: true,
+        providerId,
+        validatedModel: matched?.id || modelId,
+        connectionStatus: 'connected',
+        checkedAt: Date.now(),
+        message: matched
+          ? `Connected successfully and found Azure model ${matched.id || modelId}.`
+          : `Connected successfully. Azure endpoint responded, but model ${modelId} was not explicitly listed.`,
+      };
+    }
+
+    return { ok: false, error: 'Unsupported provider for connection testing.' };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:llm-ops-run-prompt-test', async (_event, payload = {}) => {
+  const http = require('http');
+  const https = require('https');
+
+  function requestJson(targetUrl, options = {}) {
+    return new Promise((resolve, reject) => {
+      let parsed;
+      try {
+        parsed = new URL(targetUrl);
+      } catch {
+        reject(new Error('Invalid provider URL.'));
+        return;
+      }
+
+      const client = parsed.protocol === 'http:' ? http : https;
+      const method = options.method || 'GET';
+      const headers = options.headers || {};
+      const body = options.body ? JSON.stringify(options.body) : null;
+
+      if (body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      if (body && !headers['Content-Length']) headers['Content-Length'] = Buffer.byteLength(body);
+
+      const req = client.request(parsed, { method, headers, timeout: Number(options.timeoutMs) || 30000 }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { raw += chunk; });
+        res.on('end', () => {
+          let data = raw;
+          try {
+            data = raw ? JSON.parse(raw) : {};
+          } catch {}
+
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              data,
+            });
+            return;
+          }
+
+          const message = typeof data === 'object'
+            ? data?.error?.message || data?.message || `Request failed with status ${res.statusCode}`
+            : `Request failed with status ${res.statusCode}`;
+          reject(new Error(message));
+        });
+      });
+
+      req.on('error', (err) => reject(err));
+      req.on('timeout', () => {
+        req.destroy(new Error('Prompt test timed out.'));
+      });
+
+      if (body) req.write(body);
+      req.end();
+    });
+  }
+
+  try {
+    const providerId = String(payload.providerId || '').trim();
+    const baseUrl = String(payload.baseUrl || '').trim();
+    const modelId = String(payload.modelId || '').trim();
+    const apiKey = String(payload.apiKey || '').trim();
+    const prompt = String(payload.prompt || '').trim();
+    const timeoutMs = Number(payload.timeoutMs) || 30000;
+    const maxOutputTokens = Number(payload.maxOutputTokens) || 2048;
+    const temperature = Number.isFinite(Number(payload.temperature)) ? Number(payload.temperature) : 0.2;
+
+    if (!providerId) return { ok: false, error: 'No provider selected.' };
+    if (!baseUrl) return { ok: false, error: 'Provider base URL is required.' };
+    if (!modelId) return { ok: false, error: 'Model ID is required.' };
+    if (!prompt) return { ok: false, error: 'Prompt text is required.' };
+
+    const baseUrlNoSlash = baseUrl.replace(/\/+$/, '');
+
+    if (['openai', 'groq', 'grok', 'custom', 'local'].includes(providerId)) {
+      const headers = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      if (providerId === 'openai' && payload.organization) headers['OpenAI-Organization'] = String(payload.organization).trim();
+      if (providerId === 'openai' && payload.project) headers['OpenAI-Project'] = String(payload.project).trim();
+
+      const response = await requestJson(`${baseUrlNoSlash}/chat/completions`, {
+        method: 'POST',
+        headers,
+        timeoutMs,
+        body: {
+          model: modelId,
+          temperature,
+          max_tokens: maxOutputTokens,
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant used for a Launchline prompt test.' },
+            { role: 'user', content: prompt },
+          ],
+        },
+      });
+
+      const data = response?.data || {};
+      const choice = Array.isArray(data.choices) ? data.choices[0] : null;
+      const outputText = choice?.message?.content || '';
+      const usage = data?.usage || null;
+      return {
+        ok: true,
+        providerId,
+        modelId,
+        outputText,
+        usage,
+        rawId: data?.id || null,
+      };
+    }
+
+    if (providerId === 'anthropic') {
+      if (!apiKey) return { ok: false, error: 'Anthropic API key is required for prompt testing.' };
+
+      const response = await requestJson(`${baseUrlNoSlash}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        timeoutMs,
+        body: {
+          model: modelId,
+          max_tokens: maxOutputTokens,
+          temperature,
+          system: 'You are a helpful assistant used for a Launchline prompt test.',
+          messages: [
+            { role: 'user', content: prompt },
+          ],
+        },
+      });
+
+      const data = response?.data || {};
+      const outputText = Array.isArray(data.content)
+        ? data.content.filter((item) => item?.type === 'text').map((item) => item.text || '').join('\n').trim()
+        : '';
+      const usage = data?.usage
+        ? {
+            prompt_tokens: data.usage.input_tokens ?? null,
+            completion_tokens: data.usage.output_tokens ?? null,
+            total_tokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+          }
+        : null;
+      return {
+        ok: true,
+        providerId,
+        modelId: data?.model || modelId,
+        outputText,
+        usage,
+        rawId: data?.id || null,
+      };
+    }
+
+    if (providerId === 'gemini') {
+      if (!apiKey) return { ok: false, error: 'Gemini API key is required for prompt testing.' };
+
+      const response = await requestJson(`${baseUrlNoSlash}/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        timeoutMs,
+        body: {
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }],
+            },
+          ],
+          systemInstruction: {
+            parts: [{ text: 'You are a helpful assistant used for a Launchline prompt test.' }],
+          },
+          generationConfig: {
+            temperature,
+            maxOutputTokens,
+          },
+        },
+      });
+
+      const data = response?.data || {};
+      const candidate = Array.isArray(data.candidates) ? data.candidates[0] : null;
+      const outputText = Array.isArray(candidate?.content?.parts)
+        ? candidate.content.parts.map((part) => part?.text || '').join('\n').trim()
+        : '';
+      const usage = data?.usageMetadata
+        ? {
+            prompt_tokens: data.usageMetadata.promptTokenCount ?? null,
+            completion_tokens: data.usageMetadata.candidatesTokenCount ?? null,
+            total_tokens: data.usageMetadata.totalTokenCount ?? null,
+          }
+        : null;
+      return {
+        ok: true,
+        providerId,
+        modelId: data?.modelVersion || modelId,
+        outputText,
+        usage,
+        rawId: data?.responseId || null,
+      };
+    }
+
+    if (providerId === 'azure-openai') {
+      const azureApiKey = apiKey;
+      const deployment = String(payload.deployment || '').trim();
+      const apiVersion = String(payload.apiVersion || '2024-10-21').trim();
+      if (!azureApiKey) return { ok: false, error: 'Azure OpenAI API key is required for prompt testing.' };
+      if (!deployment) return { ok: false, error: 'Azure deployment name is required for prompt testing.' };
+
+      const response = await requestJson(`${baseUrlNoSlash}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`, {
+        method: 'POST',
+        headers: {
+          'api-key': azureApiKey,
+        },
+        timeoutMs,
+        body: {
+          temperature,
+          max_tokens: maxOutputTokens,
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant used for a Launchline prompt test.' },
+            { role: 'user', content: prompt },
+          ],
+        },
+      });
+
+      const data = response?.data || {};
+      const choice = Array.isArray(data.choices) ? data.choices[0] : null;
+      const outputText = choice?.message?.content || '';
+      const usage = data?.usage || null;
+      return {
+        ok: true,
+        providerId,
+        modelId,
+        outputText,
+        usage,
+        rawId: data?.id || null,
+      };
+    }
+
+    return { ok: false, error: 'Unsupported provider for prompt testing.' };
   } catch (err) {
     return { ok: false, error: err.message };
   }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowRightCircle, ChevronLeft, ChevronRight, Copy, Database, Download, FolderOpen, Minus, RotateCcw, Square, Upload, X } from 'lucide-react';
 import '../styles/theme.css';
 import { useSettings } from '../hooks/useSettings';
@@ -75,176 +75,57 @@ function TitleBar({ primary, accent }) {
   );
 }
 
-const APP_VERSION = '0.1.0';
-const POLL_INTERVAL_MS = 30000;
-
-function timeAgoShort(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - ts;
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return new Date(ts).toLocaleDateString();
-}
-
-function FooterBar({ activeLabel, fullName, savedAt, onNavigate, onOpenStorage, workspaceKey, workspaceLabel }) {
-  const [status, setStatus] = useState(null);
-  const [savedFlash, setSavedFlash] = useState(false);
-  const savedAtRef = useRef(null);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        if (!window.electronAPI?.getFooterStatus) return;
-        const result = await window.electronAPI.getFooterStatus();
-        if (result?.ok) setStatus(result);
-      } catch {}
-    }
-    load();
-    const id = setInterval(load, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [workspaceKey]);
-
-  useEffect(() => {
-    if (!savedAt || savedAt === savedAtRef.current) return;
-    savedAtRef.current = savedAt;
-    setSavedFlash(true);
-    const t = setTimeout(() => setSavedFlash(false), 2500);
-    return () => clearTimeout(t);
-  }, [savedAt]);
-
-  const venv = status?.venv;
-  const lastRun = status?.lastRun;
-
-  let dotColor = 'rgba(255,255,255,0.18)';
-  let dotPulse = false;
-  let venvLabel = '…';
-  let venvTooltip = 'Checking Python environment…';
-  if (venv) {
-    if (venv.projectDetected === false) {
-      dotColor = 'rgba(148,163,184,0.85)';
-      venvLabel = 'No Python signals';
-      venvTooltip = `${venv.workspaceName || 'This workspace'} does not currently expose pyproject.toml, requirements.txt, or .venv signals. Python Tools is still available if you want to prepare a Python environment.`;
-    } else if (!venv.exists) {
-      dotColor = '#f87171';
-      venvLabel = 'No venv';
-      venvTooltip = 'No virtual environment found. Go to Python Tools to create one.';
-    } else if (!venv.interpreterOk) {
-      dotColor = '#f59e0b';
-      venvLabel = 'Venv broken';
-      venvTooltip = 'Virtual environment exists but the Python interpreter is missing or broken. Go to Python Tools to rebuild.';
-    } else {
-      dotColor = '#34d399';
-      dotPulse = true;
-      venvLabel = venv.pythonVersion ? `python ${venv.pythonVersion}` : 'Venv ok';
-      venvTooltip = `Python environment is healthy${venv.pythonVersion ? ` · python ${venv.pythonVersion}` : ''}${venv.lockfileExists ? ' · lockfile present' : ''}. Click to open Python Tools.`;
-    }
-  }
-
-  const dotStyle = {
-    width: 6, height: 6, borderRadius: '50%',
-    background: dotColor, display: 'inline-block', flexShrink: 0,
-    animation: dotPulse ? 'pulse 2s infinite' : 'none',
-  };
-
-  const pill = { display: 'inline-flex', alignItems: 'center', gap: 5 };
-
-  const clickableStyle = {
-    cursor: 'pointer',
-    borderRadius: 4,
-    padding: '1px 4px',
-    margin: '0 -4px',
-    transition: 'background 0.15s',
-  };
-
+function FooterBar({ workspaceLabel, workspacePath, onOpenWorkspace }) {
   return (
     <footer className="footer-bar" style={{ flexShrink: 0 }}>
-
-      {/* LEFT — venv health + saved flash */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        <button
-          style={{ ...pill, ...clickableStyle, background: 'transparent', border: 'none', color: 'inherit', font: 'inherit' }}
-          title={venvTooltip}
-          onClick={() => onNavigate?.('python-tools')}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-        >
-          <span style={dotStyle} />
-          <span>{venvLabel}</span>
-        </button>
-        {savedFlash && (
-          <span
-            style={{ color: '#34d399', letterSpacing: 0 }}
-            title="Settings were just saved to disk"
-          >
-            · ✓ Saved
-          </span>
-        )}
-      </div>
-
-      {/* CENTER — active page */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-        <span
-          style={{ color: 'var(--text-secondary)' }}
-          title={`Currently viewing: ${activeLabel}${workspaceLabel ? ` · active workspace ${workspaceLabel}` : ''}`}
-        >
-          {activeLabel}
+      <button
+        type="button"
+        onClick={onOpenWorkspace}
+        title="Open workspace loading"
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          gap: 10,
+          minWidth: 0,
+          color: '#86efac',
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(52,211,153,0.06)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+      >
+        <FolderOpen size={14} />
+        <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+          Loaded Workspace
         </span>
-        {workspaceLabel ? (
+        <span style={{ color: 'rgba(134,239,172,0.65)' }}>·</span>
+        <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }} title={workspaceLabel || 'Loading workspace context...'}>
+          {workspaceLabel || 'Loading workspace context...'}
+        </span>
+        {workspacePath ? (
           <>
-            <span style={{ color: 'var(--text-muted)' }}>·</span>
+            <span style={{ color: 'rgba(134,239,172,0.65)' }}>·</span>
             <span
               style={{
-                color: 'var(--text-muted)',
-                maxWidth: 180,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-              title={`Active workspace: ${workspaceLabel}`}
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontFamily: 'var(--font-mono)',
+                color: '#86efac',
+              }}
+              title={workspacePath}
             >
-              {workspaceLabel}
+              {workspacePath}
             </span>
           </>
         ) : null}
-      </div>
-
-      {/* RIGHT — last run + version */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 14, minWidth: 0 }}>
-        {lastRun && (
-          <button
-            style={{ ...pill, ...clickableStyle, background: 'transparent', border: 'none', font: 'inherit', color: lastRun.ok ? '#34d399' : '#f87171', minWidth: 0 }}
-            title={`Last run: ${lastRun.command}\nResult: ${lastRun.ok ? 'Success' : 'Failed'} · ${lastRun.durationMs != null ? `${(lastRun.durationMs / 1000).toFixed(1)}s` : '?'}\nClick to open Python Tools.`}
-            onClick={() => onNavigate?.('python-tools')}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <span>{lastRun.ok ? '✓' : '✗'}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
-              {lastRun.command}
-            </span>
-            <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>· {timeAgoShort(lastRun.startedAt)}</span>
-          </button>
-        )}
-        <button
-          type="button"
-          style={{ ...pill, ...clickableStyle, background: 'transparent', border: 'none', font: 'inherit', color: 'var(--text-secondary)' }}
-          title="Open storage controls"
-          onClick={onOpenStorage}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-        >
-          <Database size={13} />
-          <span>Storage</span>
-        </button>
-        <span
-          style={{ flexShrink: 0 }}
-          title={`${fullName} version ${APP_VERSION}`}
-        >
-          {fullName} v{APP_VERSION}
-        </span>
-      </div>
-
+      </button>
     </footer>
   );
 }
@@ -674,7 +555,6 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
   );
   const {
     settings,
-    savedAt,
     storageInfo,
     refreshStorageInfo,
     exportSettings,
@@ -684,7 +564,6 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
   const company = settings?.company || {};
   const primary = company.namePrimary || company.name || 'App';
   const accent = company.nameAccent || '';
-  const fullName = `${primary}${accent}`.trim() || 'Launchline';
 
   const flatNavItems = useMemo(
     () => [...groups.flatMap((group) => group.items), ...standaloneItems.filter((item) => !item.divider)],
@@ -966,13 +845,9 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
             })}
           </main>
           <FooterBar
-            activeLabel={activeItem?.label || ''}
-            fullName={fullName}
-            savedAt={savedAt}
-            onNavigate={navigateTo}
-            onOpenStorage={openStorageModal}
-            workspaceKey={activeWorkspaceId}
             workspaceLabel={analysisWorkspace?.name || ''}
+            workspacePath={analysisWorkspace?.path || ''}
+            onOpenWorkspace={openWorkspaceModal}
           />
         </div>
       </div>
