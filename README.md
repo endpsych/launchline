@@ -1,5 +1,10 @@
 # Launchline
 
+
+
+![File Fixing](gifs/file-fixing.gif)
+
+
 Launchline is a standalone Electron desktop app for two practical workflows:
 
 - Python environment tooling for local developer setup
@@ -9,91 +14,91 @@ It is designed as a local desktop workspace for checking Python runtime health, 
 
 ## Current Product Status
 
-Launchline is already usable, but the maturity is uneven across features.
+Launchline is usable. Maturity varies across pages.
 
-- `Python Tools` is mostly working and is one of the strongest parts of the app today.
-- `Production > Secrets` is the most complete production audit surface.
-- The other production tabs are implemented and run real repo scans, but they are still earlier-stage audit surfaces and should be considered less validated than Secrets.
+- `Python` is one of the strongest parts of the app and has the most complete edit surface.
+- `Secrets` is the most polished production audit page.
+- `LLMOPS` is the most recently refreshed audit page and covers provider configuration, prompt testing, evals, and model operations posture.
+- The remaining production audit pages run real repo scans but are still earlier-stage surfaces.
 
 ## Working Features
 
-### Python Tools
+### Python
 
-The Python Tools page is the main operational workspace for local Python setup.
+The Python page is the primary operational workspace for local Python setup. It has three tabs: Main, Installs, and Package Catalog.
 
-Current working capabilities include:
+Current capabilities include:
 
-- Detecting local `uv`, Python, and virtual environment status
-- Reading project Python configuration from `pyproject.toml`
-- Recommending environment strategy for the workspace
+- Detecting local `uv`, Python, and virtual environment status with live health scoring
+- Viewing actionable health checks that scroll directly to the relevant control when clicked
+- Detecting the default launcher runtime and available Python installations with download CTAs when runtimes are missing
+- Viewing `uv` install status with a one-step install prompt when not found
+- Managing `pyproject.toml` from inside the app: reading project metadata (name, version, status), editing `requires-python`, adding and removing base dependencies, creating and deleting dependency groups, all writing directly to the file
+- A browsable package catalog with PyPI import and a bridge for adding catalog packages directly to `pyproject.toml`
 - Creating, rebuilding, syncing, and deleting the project virtual environment
-- Inspecting available Python runtimes
-- Summarizing installed dependencies and package groups
-- Editing project dependency configuration from the app
-- Tracking command output and run history for Python tooling actions
-- Opening relevant paths and terminals directly from the UI
+- Inspecting installed venv packages and reading dependency summaries across sources
+- Tracking command output, run history, and terminal access from an embedded log panel
+- Opening relevant paths and folders directly from the UI
 
-The Python Tools surface is not just a mockup. It is connected to real Electron/main-process actions and local filesystem checks.
+The Python page is connected to real Electron main-process IPC and local filesystem operations throughout.
 
-### Production: Secrets
+### Secrets
 
-The Secrets tab is the most mature production-readiness audit in Launchline.
+The Secrets page is the most mature production audit in Launchline.
 
-Current working capabilities include:
+Current capabilities include:
 
 - Scanning `.env`, `.env.local`, `.env.example`, and related environment files
 - Checking gitignore coverage for local secret-bearing files
 - Comparing expected provider variables against current env-file contents
-- Showing hygiene trends and follow-up actions
+- Showing hygiene trends and surfacing follow-up actions
 - Tracking rotation reminders in app settings
-- Surfacing common configuration and hygiene issues directly in the UI
+- Detecting history exposure and setup drift between env files
 
-If you are evaluating Launchline as a portfolio project, this is currently the strongest example of the production-audit workflow.
+If you are evaluating Launchline as a portfolio project, Secrets is currently the strongest example of the production-audit workflow.
 
-### Production: Other Audit Tabs
+### LLMOPS
 
-The remaining production tabs are not simple placeholders anymore. Each one has a real UI and calls a real workspace scan in the Electron backend.
+![Prompt testing](gifs/prompt-testing.gif)
 
-Implemented audit tabs currently include:
 
-- `Containerization`
-- `CI/CD Pipeline`
-- `Monitoring`
-- `Data Versioning`
-- `Model Registry`
-- `Disaster Recovery`
-- `Audit Logging`
-- `Access Control`
 
-These tabs currently provide:
+The LLMOPS page covers the LLM-facing operational surface for an application.
 
-- Workspace scanning against repo files and configuration
-- Readiness scores and checklist-style summaries
-- Sectioned findings and refreshable audit views
-- Heuristic detection of technologies, files, and operational signals relevant to each domain
+Current capabilities include:
 
-These tabs are best described as:
+- Provider configuration and selection across major hosted model providers
+- Prompt testing and saved prompt management
+- Eval run history and structured evaluation workflows
+- Feature-to-model binding configuration
+- Runtime posture review for LLM-dependent workloads
 
-- working
-- real
-- early-stage
-- more heuristic than deeply validated
+### Production: Other Audit Pages
 
-In other words, they are useful portfolio evidence of the product direction and engineering approach, but Secrets is still the most polished audit surface.
+The remaining production pages each have a real UI and call real workspace scans in the Electron backend.
+
+Current pages:
+
+- `Containerization` — Docker, Compose, and Kubernetes posture
+- `CI/CD` — Pipeline coverage, workflow files, and delivery posture
+- `Monitoring` — Logging, metrics, tracing, and alerting signals
+- `Data Versioning` — DVC, data assets, schemas, and reproducibility posture
+- `Model Registry` — Experiment tracking, model artifacts, and registry posture
+- `Disaster Recovery` — Backups, runbooks, failover, and recovery posture
+- `Audit Logging` — Traceability, audit trails, and retention posture
+- `Access Control` — Authentication, authorization, and RBAC review
+
+Each page provides workspace scanning against repo files and configuration, readiness scores, checklist-style summaries, and heuristic detection of technologies and operational signals for that domain.
+
+These pages are working and real but are best described as early-stage and more heuristic than deeply validated. They are solid portfolio evidence of the product direction and engineering approach.
 
 ## Planned / Still Developing
 
-The app still has meaningful roadmap work ahead before it feels fully productized.
-
-Areas still in development include:
-
-- deeper remediation guidance inside the non-Secrets production tabs
-- stronger verification and calibration of production audit heuristics
-- broader packaging and release polish for distribution to end users
-- more polished documentation, screenshots, and demo material
-- additional maintainability work to keep shrinking and modularizing the codebase
-
-Some production tabs already function, but they still need more refinement before they should be treated as authoritative operational assessments.
+- Deeper remediation guidance inside the non-Secrets production pages
+- Stronger verification and calibration of production audit heuristics
+- Packaging and release polish for end-user distribution
+- Additional screenshots and demo material
+- Continued modularization of the larger source files
 
 ## Storage
 

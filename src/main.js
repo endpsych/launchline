@@ -25,7 +25,7 @@ const {
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const APP_DISPLAY_NAME = 'Launchline';
-const DEV_SERVER_PORT = process.env.PORT || '3001';
+const DEV_SERVER_PORT = process.env.PORT || '3012';
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 
 app.setName(APP_DISPLAY_NAME);

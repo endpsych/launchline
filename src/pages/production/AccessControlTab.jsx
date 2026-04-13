@@ -442,10 +442,79 @@ function ZeroTrustSection({ zeroTrust }) {
 
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
+// ─── Cloud SDK Credentials section ───────────────────────────────────────────
+
+function CloudSDKSection({ cloudSdkScan }) {
+  if (!cloudSdkScan) return null;
+
+  const providers = [
+    {
+      key: 'aws',
+      label: 'AWS',
+      active: cloudSdkScan.aws?.found && cloudSdkScan.aws?.hasKeys,
+      detail: cloudSdkScan.aws?.found
+        ? `${cloudSdkScan.aws.profileCount} profile${cloudSdkScan.aws.profileCount !== 1 ? 's' : ''} — ${cloudSdkScan.aws.profiles?.join(', ') || 'default'}`
+        : 'No credentials file found',
+      hint: 'Use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in .env',
+    },
+    {
+      key: 'gcloud',
+      label: 'GCloud',
+      active: cloudSdkScan.gcloud?.found && cloudSdkScan.gcloud?.hasAdc,
+      detail: cloudSdkScan.gcloud?.found
+        ? `ADC present (type: ${cloudSdkScan.gcloud.credType})`
+        : 'No application_default_credentials.json found',
+      hint: 'Use GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_PROJECT in .env',
+    },
+    {
+      key: 'azure',
+      label: 'Azure',
+      active: cloudSdkScan.azure?.found && cloudSdkScan.azure?.hasTokens,
+      detail: cloudSdkScan.azure?.found
+        ? `~/.azure found${cloudSdkScan.azure.hasTokens ? ' — MSAL token cache present' : ''}${cloudSdkScan.azure.subscriptionCount ? ` (${cloudSdkScan.azure.subscriptionCount} subscription${cloudSdkScan.azure.subscriptionCount !== 1 ? 's' : ''})` : ''}`
+        : 'No ~/.azure directory found',
+      hint: 'Use AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID in .env',
+    },
+  ];
+  const anyActive = providers.some((p) => p.active);
+
+  return (
+    <Collapsible title="Cloud SDK Credentials" icon={Key}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: anyActive ? 10 : 0 }}>
+        {providers.map((p) => (
+          <div key={p.key} style={{
+            borderRadius: 8, padding: '10px 12px',
+            border: `1px solid ${p.active ? 'rgba(251,191,36,0.3)' : 'rgba(74,222,128,0.2)'}`,
+            background: p.active ? 'rgba(251,191,36,0.06)' : 'rgba(74,222,128,0.04)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: p.active ? '#fbbf24' : '#4ade80' }}>{p.label}</span>
+              {p.active
+                ? <AlertTriangle size={11} style={{ color: '#fbbf24' }} />
+                : <CheckCircle2 size={11} style={{ color: '#4ade80' }} />
+              }
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: p.active ? 6 : 0 }}>{p.detail}</div>
+            {p.active && <div style={{ fontSize: 9, color: 'rgba(251,191,36,0.6)', lineHeight: 1.55, fontStyle: 'italic' }}>{p.hint}</div>}
+          </div>
+        ))}
+      </div>
+      {anyActive && (
+        <div style={{ fontSize: 10, color: 'rgba(148,163,184,0.45)', lineHeight: 1.6 }}>
+          CLI-managed credentials are convenient but make it harder to replicate environments in CI/CD and team setups. Consider mapping them to .env variables for portability.
+        </div>
+      )}
+    </Collapsible>
+  );
+}
+
+// ─── Main tab ─────────────────────────────────────────────────────────────────
+
 export default function AccessControlTab() {
-  const [status, setStatus]   = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
+  const [status, setStatus]           = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState(null);
+  const [cloudSdkScan, setCloudSdkScan] = useState(null);
   const loadedRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -460,6 +529,13 @@ export default function AccessControlTab() {
   }, []);
 
   useEffect(() => { if (!loadedRef.current) { loadedRef.current = true; load(); } }, [load]);
+
+  useEffect(() => {
+    if (!window.electronAPI?.pythonSecretsStatus) return;
+    window.electronAPI.pythonSecretsStatus({ expectedVars: [] })
+      .then(res => { if (res?.ok && res.cloudSdkScan) setCloudSdkScan(res.cloudSdkScan); })
+      .catch(() => {});
+  }, []);
 
   if (loading && !status) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: 28, color: 'rgba(148,163,184,0.5)', fontSize: 12 }}>
@@ -515,6 +591,7 @@ export default function AccessControlTab() {
       <OAuthSection oauth={status.oauth} />
       <ServiceAccountsSection serviceAccounts={status.serviceAccounts} />
       <ZeroTrustSection zeroTrust={status.zeroTrust} />
+      <CloudSDKSection cloudSdkScan={cloudSdkScan} />
     </Section>
   );
 }

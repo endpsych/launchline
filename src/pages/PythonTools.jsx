@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BarChart2, Box, Boxes, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, FileCode2, FolderOpen, HelpCircle, PlayCircle, Plus, RefreshCw, Search, TerminalSquare, Trash2, XCircle } from 'lucide-react';
-import { PYTHON_WORKLOAD_MANIFESTS } from '../python/pagePythonManifests';
 import { buildCatalogEntryFromPyPI, getCatalogStatusMeta, mergePackageCatalog, normalizeCatalogEntry, normalizeCatalogStatus, PACKAGE_CATALOG_STATUS_OPTIONS } from '../python/packageCatalogUtils';
-import { evaluateWorkspaceVenvStrategy } from '../python/venvRecommendationEngine';
 import { SETTINGS_DEFAULT, useSettings } from '../hooks/useSettings';
 import { Section, inputStyle } from '../ui-kit/forms/SettingsLayout';
 import { PYTHON_PACKAGE_CATALOG, PYTHON_PACKAGE_CATEGORIES, PYTHON_TECHNICAL_PROPERTY_CATEGORIES } from '../ui-showcase/data/pythonPackageCatalog';
@@ -95,19 +93,6 @@ function slugifyEnvironmentId(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function getRecommendationAppearance(outcome) {
-  if (outcome === 'strongly_recommend_secondary_venv') {
-    return { label: 'Separate venv strongly recommended', color: '#f87171', border: 'rgba(248,113,113,0.2)', background: 'rgba(248,113,113,0.08)' };
-  }
-  if (outcome === 'recommend_secondary_venv') {
-    return { label: 'Separate venv recommended', color: '#fbbf24', border: 'rgba(251,191,36,0.22)', background: 'rgba(251,191,36,0.08)' };
-  }
-  if (outcome === 'allow_primary_but_monitor') {
-    return { label: 'Primary venv okay with monitoring', color: '#fbbf24', border: 'rgba(251,191,36,0.22)', background: 'rgba(251,191,36,0.08)' };
-  }
-  return { label: 'Use the primary app venv', color: '#4ade80', border: 'rgba(74,222,128,0.18)', background: 'rgba(74,222,128,0.08)' };
 }
 
 function formatBytes(value) {
@@ -758,6 +743,7 @@ export default function PythonTools() {
   });
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [pathsOpen, setPathsOpen] = useState(false);
   const [terminalTab, setTerminalTab] = useState('output');
   const [showProbes, setShowProbes] = useState(false);
   const [terminalSearch, setTerminalSearch] = useState('');
@@ -773,6 +759,16 @@ export default function PythonTools() {
   const [addDepGroup,  setAddDepGroup]  = useState('base');
   const [addDepSaving, setAddDepSaving] = useState(false);
   const [depActionMsg, setDepActionMsg] = useState(null);
+  const [openTip, setOpenTip] = useState(null);
+  const [requiresPythonDraft, setRequiresPythonDraft] = useState('');
+  const [requiresPythonSaving, setRequiresPythonSaving] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupSaving, setNewGroupSaving] = useState(false);
+  const [catalogAddSpec, setCatalogAddSpec] = useState('');
+  const [catalogAddGroup, setCatalogAddGroup] = useState('base');
+  const [catalogAddSaving, setCatalogAddSaving] = useState(false);
+  const [catalogAddMsg, setCatalogAddMsg] = useState(null);
+  const [createPyprojectSaving, setCreatePyprojectSaving] = useState(false);
   const [createVenvHelpOpen, setCreateVenvHelpOpen] = useState(false);
   const [checkVenvHelpOpen, setCheckVenvHelpOpen] = useState(false);
   const [rebuildVenvHelpOpen, setRebuildVenvHelpOpen] = useState(false);
@@ -796,6 +792,8 @@ export default function PythonTools() {
   const runtimeHydratedRef = useRef(false);
   const runtimeDataRef = useRef(null);
   const terminalBodyRef = useRef(null);
+  const venvCardRef = useRef(null);
+  const pyprojectCardRef = useRef(null);
 
   const current = draft || settings || SETTINGS_DEFAULT;
   const pythonTools = current.pythonTools || SETTINGS_DEFAULT.pythonTools;
@@ -844,14 +842,6 @@ export default function PythonTools() {
   const packageCatalog = useMemo(
     () => mergePackageCatalog(customCatalogEntries, catalogOverrides),
     [catalogOverrides, customCatalogEntries]
-  );
-  const workspaceVenvStrategy = useMemo(
-    () => evaluateWorkspaceVenvStrategy({
-      manifests: PYTHON_WORKLOAD_MANIFESTS,
-      runtimeSnapshot: runtime.data || pythonTools.runtimeSnapshot || {},
-      packageCatalog,
-    }),
-    [packageCatalog, pythonTools.runtimeSnapshot, runtime.data]
   );
   const workspaceProjectDetected = !!projectConfig.data?.exists || !!runtime.data?.files?.hasPyproject;
   const workspacePythonSignalsDetected = !!runtime.data?.files?.hasPyproject || !!runtime.data?.files?.hasRequirements || !!runtime.data?.files?.hasVenv;
@@ -963,6 +953,16 @@ export default function PythonTools() {
     if (assignmentPackageName || assignmentInstallSpec || !selectedPackage) return;
     setAssignmentInstallSpec(selectedPackage.defaultInstallSpec || selectedPackage.name);
   }, [assignmentInstallSpec, assignmentPackageName, selectedPackage]);
+
+  useEffect(() => {
+    if (!projectConfig.data?.metadata?.requiresPython) return;
+    setRequiresPythonDraft(projectConfig.data.metadata.requiresPython);
+  }, [projectConfig.data?.metadata?.requiresPython]);
+
+  useEffect(() => {
+    setCatalogAddSpec(selectedPackage?.defaultInstallSpec || selectedPackage?.name || '');
+    setCatalogAddMsg(null);
+  }, [selectedPackage?.name]);
 
   function setSection(sectionKey, nextValue) {
     setDraft((prev) => {
@@ -1612,6 +1612,139 @@ export default function PythonTools() {
     }
   }
 
+  async function saveRequiresPython() {
+    const value = requiresPythonDraft.trim();
+    if (!value || !projectConfig.data) return;
+    setRequiresPythonSaving(true);
+    setDepActionMsg(null);
+    try {
+      const res = await window.electronAPI.writePythonProjectConfig({
+        metadata: { ...projectConfig.data.metadata, requiresPython: value },
+      });
+      if (res?.ok) {
+        setProjectConfig(prev => ({ ...prev, data: res.config }));
+        setDepActionMsg({ text: `requires-python updated to ${value}.`, ok: true });
+      } else {
+        setDepActionMsg({ text: res?.error || 'Failed to write pyproject.toml', ok: false });
+      }
+    } catch (e) {
+      setDepActionMsg({ text: e.message, ok: false });
+    } finally {
+      setRequiresPythonSaving(false);
+    }
+  }
+
+  async function createGroup() {
+    const name = newGroupName.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    if (!name || !projectConfig.data) return;
+    if (projectConfig.data.groups?.[name] !== undefined) {
+      setDepActionMsg({ text: `Group "${name}" already exists.`, ok: false });
+      return;
+    }
+    setNewGroupSaving(true);
+    setDepActionMsg(null);
+    try {
+      const res = await window.electronAPI.writePythonProjectConfig({
+        groups: { ...(projectConfig.data.groups || {}), [name]: [] },
+      });
+      if (res?.ok) {
+        setProjectConfig(prev => ({ ...prev, data: res.config }));
+        setNewGroupName('');
+        setAddDepGroup(name);
+        setDepActionMsg({ text: `Created group "${name}". You can now add packages to it.`, ok: true });
+      } else {
+        setDepActionMsg({ text: res?.error || 'Failed to write pyproject.toml', ok: false });
+      }
+    } catch (e) {
+      setDepActionMsg({ text: e.message, ok: false });
+    } finally {
+      setNewGroupSaving(false);
+    }
+  }
+
+  async function deleteGroup(groupName) {
+    if (!groupName || !projectConfig.data) return;
+    const specs = projectConfig.data.groups?.[groupName] || [];
+    if (specs.length > 0) {
+      const confirmed = window.confirm(`Delete group "${groupName}"? It still has ${specs.length} package${specs.length > 1 ? 's' : ''} declared. They will be removed from pyproject.toml.`);
+      if (!confirmed) return;
+    }
+    setDepActionMsg(null);
+    try {
+      const nextGroups = { ...(projectConfig.data.groups || {}) };
+      delete nextGroups[groupName];
+      const res = await window.electronAPI.writePythonProjectConfig({ groups: nextGroups });
+      if (res?.ok) {
+        setProjectConfig(prev => ({ ...prev, data: res.config }));
+        if (addDepGroup === groupName) setAddDepGroup('base');
+        setDepActionMsg({ text: `Deleted group "${groupName}".`, ok: true });
+        loadDependencySummary();
+      } else {
+        setDepActionMsg({ text: res?.error || 'Failed to write pyproject.toml', ok: false });
+      }
+    } catch (e) {
+      setDepActionMsg({ text: e.message, ok: false });
+    }
+  }
+
+  async function addCatalogPackageToPyproject() {
+    const spec = catalogAddSpec.trim();
+    if (!spec || !projectConfig.data) return;
+    setCatalogAddSaving(true);
+    setCatalogAddMsg(null);
+    try {
+      const current = projectConfig.data;
+      const pkgName = spec.split(/[>=<!~^,; ]/)[0].toLowerCase();
+      let newDeps = [...(current.dependencies || [])];
+      let newGroups = { ...(current.groups || {}) };
+      if (catalogAddGroup === 'base') {
+        if (newDeps.some(d => d.toLowerCase().startsWith(pkgName))) {
+          setCatalogAddMsg({ ok: false, text: `${pkgName} is already in base dependencies.` });
+          return;
+        }
+        newDeps = [...newDeps, spec];
+      } else {
+        const existing = newGroups[catalogAddGroup] || [];
+        if (existing.some(d => d.toLowerCase().startsWith(pkgName))) {
+          setCatalogAddMsg({ ok: false, text: `${pkgName} is already in group: ${catalogAddGroup}.` });
+          return;
+        }
+        newGroups = { ...newGroups, [catalogAddGroup]: [...existing, spec] };
+      }
+      const res = await window.electronAPI.writePythonProjectConfig({ dependencies: newDeps, groups: newGroups });
+      if (res?.ok) {
+        setProjectConfig(prev => ({ ...prev, data: res.config }));
+        setCatalogAddMsg({ ok: true, text: `Added to ${catalogAddGroup === 'base' ? 'base dependencies' : `group: ${catalogAddGroup}`}. Run Sync to install.` });
+        loadDependencySummary();
+      } else {
+        setCatalogAddMsg({ ok: false, text: res?.error || 'Failed to write pyproject.toml' });
+      }
+    } catch (e) {
+      setCatalogAddMsg({ ok: false, text: e.message });
+    } finally {
+      setCatalogAddSaving(false);
+    }
+  }
+
+  async function createPyprojectToml() {
+    setCreatePyprojectSaving(true);
+    setCatalogAddMsg(null);
+    try {
+      const res = await window.electronAPI.writePythonProjectConfig({});
+      if (res?.ok) {
+        setProjectConfig({ loading: false, data: res.config, error: null });
+        setCatalogAddMsg({ ok: true, text: 'pyproject.toml created. You can now add packages.' });
+        loadDependencySummary();
+      } else {
+        setCatalogAddMsg({ ok: false, text: res?.error || 'Failed to create pyproject.toml' });
+      }
+    } catch (e) {
+      setCatalogAddMsg({ ok: false, text: e.message });
+    } finally {
+      setCreatePyprojectSaving(false);
+    }
+  }
+
   async function createVirtualEnvironment(overrideRuntimePath) {
     if (!window.electronAPI?.createPythonVenv) {
       setRuntime((currentRuntime) => ({ ...currentRuntime, error: 'Virtual environment creation bridge is unavailable.' }));
@@ -1990,6 +2123,11 @@ export default function PythonTools() {
     const selectedPackageDocsUrl = selectedPackage?.docsUrl || '';
     const selectedTechnicalProperties = selectedPackage?.technicalProperties || [];
     const selectedPackageStatusMeta = getCatalogStatusMeta(selectedPackage?.status);
+    const catalogAddPkgName = catalogAddSpec.split(/[>=<!~^,; ]/)[0].toLowerCase();
+    const catalogPackageAlreadyDeclared = !!selectedPackage && !!projectConfig.data && (
+      (projectConfig.data.dependencies || []).some(d => d.toLowerCase().startsWith(catalogAddPkgName)) ||
+      Object.values(projectConfig.data.groups || {}).flat().some(d => d.toLowerCase().startsWith(catalogAddPkgName))
+    );
     const filteredSelectedTasks = selectedPackage
       ? selectedPackage.sampleTasks.filter((task) => task.toLowerCase().includes(taskSearch.trim().toLowerCase()))
       : [];
@@ -2427,6 +2565,116 @@ export default function PythonTools() {
             >
               {selectedPackage ? (
                 <div style={{ height: '100%', overflowY: 'auto', padding: '18px 20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                  {/* Add to pyproject.toml */}
+                  {(() => {
+                    const noPyproject = !projectConfig.data;
+                    const borderCol = catalogPackageAlreadyDeclared
+                      ? 'rgba(74,222,128,0.22)'
+                      : noPyproject
+                        ? 'rgba(251,191,36,0.2)'
+                        : 'rgba(139,182,255,0.18)';
+                    const bgCol = catalogPackageAlreadyDeclared
+                      ? 'rgba(74,222,128,0.05)'
+                      : noPyproject
+                        ? 'rgba(251,191,36,0.04)'
+                        : 'rgba(139,182,255,0.05)';
+                    const labelCol = catalogPackageAlreadyDeclared ? catalogAccent : noPyproject ? '#fbbf24' : '#8bb6ff';
+                    const label = catalogPackageAlreadyDeclared
+                      ? 'Declared in pyproject.toml'
+                      : noPyproject
+                        ? 'No pyproject.toml'
+                        : 'Add to pyproject.toml';
+                    return (
+                      <div style={{ borderRadius: 12, border: `1px solid ${borderCol}`, background: bgCol, padding: '14px 16px', display: 'grid', gap: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: labelCol, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                            {label}
+                          </span>
+                          {catalogPackageAlreadyDeclared && (
+                            <span style={{ fontSize: 10, color: catalogAccent, fontWeight: 700 }}>Run Sync to install if not yet installed.</span>
+                          )}
+                        </div>
+
+                        {noPyproject ? (
+                          <div style={{ display: 'grid', gap: 10 }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                              This workspace doesn't have a <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pyproject.toml</span> yet. Create one to start managing dependencies with uv.
+                            </div>
+                            <button
+                              type="button"
+                              onClick={createPyprojectToml}
+                              disabled={createPyprojectSaving}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(251,191,36,0.25)', background: 'rgba(251,191,36,0.08)', color: '#fbbf24', fontSize: 12, fontWeight: 700, cursor: createPyprojectSaving ? 'not-allowed' : 'pointer', width: 'fit-content', opacity: createPyprojectSaving ? 0.6 : 1 }}
+                            >
+                              <Plus size={13} /> {createPyprojectSaving ? 'Creating…' : 'Create pyproject.toml'}
+                            </button>
+                          </div>
+                        ) : !catalogPackageAlreadyDeclared ? (
+                          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'grid', gap: 4, flex: '1 1 160px', minWidth: 140 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Install spec</div>
+                              <input
+                                value={catalogAddSpec}
+                                onChange={e => setCatalogAddSpec(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && addCatalogPackageToPyproject()}
+                                placeholder={selectedPackage.name}
+                                style={{ ...inputStyle, padding: '7px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)', fontFamily: 'var(--font-mono)' }}
+                              />
+                            </div>
+                            <div style={{ display: 'grid', gap: 4, flex: '0 0 auto', minWidth: 110 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Section</div>
+                              <select
+                                value={catalogAddGroup}
+                                onChange={e => setCatalogAddGroup(e.target.value)}
+                                style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 12, padding: '7px 10px', outline: 'none', cursor: 'pointer' }}
+                              >
+                                <option value="base">base</option>
+                                {Object.keys(projectConfig.data?.groups || {}).map(g => (
+                                  <option key={g} value={g}>{g}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={addCatalogPackageToPyproject}
+                              disabled={catalogAddSaving || !catalogAddSpec.trim()}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(139,182,255,0.22)', background: 'rgba(139,182,255,0.1)', color: '#8bb6ff', fontSize: 12, fontWeight: 700, cursor: catalogAddSaving || !catalogAddSpec.trim() ? 'not-allowed' : 'pointer', minHeight: 34, opacity: catalogAddSaving || !catalogAddSpec.trim() ? 0.5 : 1 }}
+                            >
+                              <Plus size={13} /> {catalogAddSaving ? 'Adding…' : 'Add'}
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {selectedPackage.installVariants?.length > 0 && !catalogPackageAlreadyDeclared && !noPyproject && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Variants</span>
+                            {selectedPackage.installVariants.map(v => {
+                              const active = catalogAddSpec === v.spec;
+                              return (
+                                <button
+                                  key={v.id}
+                                  type="button"
+                                  onClick={() => setCatalogAddSpec(v.spec)}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 999, border: active ? '1px solid rgba(139,182,255,0.3)' : '1px solid rgba(255,255,255,0.08)', background: active ? 'rgba(139,182,255,0.12)' : 'rgba(255,255,255,0.03)', color: active ? '#8bb6ff' : 'var(--text-secondary)', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                                  title={v.spec}
+                                >
+                                  {v.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {catalogAddMsg && (
+                          <div style={{ fontSize: 12, color: catalogAddMsg.ok ? '#4ade80' : '#f87171', lineHeight: 1.5 }}>
+                            {catalogAddMsg.text}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   <div
                     style={{
                       background: 'var(--bg-card)',
@@ -2871,7 +3119,12 @@ export default function PythonTools() {
     showInstallCards = true,
     showMainCards = true,
     sectionTitle = <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><FileCode2 size={16} /> uv Environment</span>,
+    noWrapper = false,
   } = {}) {
+    const SectionWrapper = noWrapper
+      ? ({ children }) => <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>{children}</div>
+      : ({ children }) => <Section title={sectionTitle}>{children}</Section>;
+
     const _runtimeBase = runtime.data || {};
     const runtimeData = {
       manager: { installed: false, version: null, path: null, error: null },
@@ -2990,7 +3243,6 @@ export default function PythonTools() {
       : pythonSignalsDetected
         ? 'The active workspace has Python signals, but no pyproject.toml manifest yet. Python Tools can still help you inspect and prepare the environment.'
         : 'The active workspace does not currently look like a Python project. Python Tools stays available so you can prepare a Python environment if this workspace grows into one.';
-    const strategySummaryAppearance = getRecommendationAppearance(workspaceVenvStrategy.highestSeverityWorkload?.outcome || 'use_primary_venv');
     const selectedEnvironmentAssignedPackages = Array.isArray(selectedEnvironmentManifest?.assignedPackages)
       ? selectedEnvironmentManifest.assignedPackages
       : [];
@@ -3030,7 +3282,7 @@ export default function PythonTools() {
 
     return (
       <>
-      <Section title={sectionTitle}>
+      <SectionWrapper>
         {runtime.error ? (
           <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 12, border: '1px solid rgba(248,113,113,0.24)', background: 'rgba(248,113,113,0.08)', color: '#fca5a5', fontSize: 13 }}>
             {runtime.error}
@@ -3040,6 +3292,58 @@ export default function PythonTools() {
           <>
             {showMainCards ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
+
+              {/* ── Environment Health Score ── */}
+              {(() => {
+                const scrollTo = (ref) => ref?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                const healthChecks = [
+                  { id: 'python',    label: 'Python installed',       pass: !!runtimeData.python?.installed, action: () => setActiveTab('installs'), hint: 'Go to Installs tab' },
+                  { id: 'uv',        label: 'uv installed',            pass: uvInstalled,                     action: () => setActiveTab('installs'), hint: 'Go to Installs tab' },
+                  { id: 'venv',      label: 'Virtual environment',     pass: venvDetected,                    action: () => scrollTo(venvCardRef),    hint: 'Go to Virtual Environment' },
+                  { id: 'pyproject', label: 'pyproject.toml present',  pass: projectDetected,                 action: () => scrollTo(pyprojectCardRef), hint: 'Go to pyproject.toml' },
+                  { id: 'lockfile',  label: 'Lockfile present',        pass: !!venvLockfile,                  action: () => scrollTo(venvCardRef),    hint: 'Run Sync to generate' },
+                  { id: 'warnings',  label: 'No environment warnings', pass: !venvDetected || venvHealthWarnings.length === 0, action: () => scrollTo(venvCardRef), hint: 'Go to Virtual Environment' },
+                ];
+                const passed     = healthChecks.filter(c => c.pass).length;
+                const total      = healthChecks.length;
+                const scoreColor = passed === total ? '#4ade80' : passed >= total * 0.6 ? '#fbbf24' : '#f87171';
+                const barWidth   = total > 0 ? Math.round((passed / total) * 100) : 0;
+                const borderCol  = passed === total ? 'rgba(74,222,128,0.25)' : 'rgba(96,165,250,0.2)';
+                const bgCol      = passed === total ? 'rgba(74,222,128,0.03)' : 'rgba(96,165,250,0.03)';
+                return (
+                  <div style={{ border: `1px solid ${borderCol}`, borderRadius: 10, padding: '12px 14px', background: bgCol }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(96,165,250,0.55)', flex: 1 }}>Environment Health</span>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: scoreColor }}>{passed}/{total}</span>
+                    </div>
+                    <div style={{ height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.07)', marginBottom: 10, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${barWidth}%`, borderRadius: 999, background: scoreColor, transition: 'width 0.4s' }} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
+                      {healthChecks.map(c => (
+                        c.pass ? (
+                          <div key={c.id} style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+                            <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0, color: '#4ade80' }}>✓</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{c.label}</span>
+                          </div>
+                        ) : (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={c.action}
+                            title={c.hint}
+                            style={{ display: 'flex', alignItems: 'baseline', gap: 7, background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', textAlign: 'left' }}
+                          >
+                            <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0, color: '#f87171' }}>✗</span>
+                            <span style={{ fontSize: 11, color: '#f87171', fontWeight: 600, textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3 }}>{c.label}</span>
+                          </button>
+                        )
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <button
                 type="button"
                 onClick={() => refreshAllRuntimeStatus()}
@@ -3049,18 +3353,6 @@ export default function PythonTools() {
                 <RefreshCw size={14} />
                 Refresh runtime
               </button>
-              {runtime.data?.paths ? (
-                <div style={{ padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'rgba(10,15,26,0.48)' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text)', marginBottom: 6, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Observed local paths</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', lineHeight: 1.8 }}>
-                    {runtime.data.paths.projectRoot && <div>Project root:&nbsp;&nbsp;{runtime.data.paths.projectRoot}</div>}
-                    {runtime.data.paths.scriptsDir && <div>Scripts directory: {runtime.data.paths.scriptsDir}</div>}
-                    {runtime.data.paths.interpreterPath && <div>Interpreter:&nbsp;&nbsp;&nbsp;{runtime.data.paths.interpreterPath}</div>}
-                    {runtime.data.paths.uvLockPath && <div>uv lock:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{runtime.data.paths.uvLockPath}</div>}
-                    {runtime.data.paths.pyprojectPath && <div>pyproject:&nbsp;&nbsp;&nbsp;&nbsp;{runtime.data.paths.pyprojectPath}</div>}
-                  </div>
-                </div>
-              ) : null}
             </div>
             ) : null}
             <ControlCard>
@@ -3151,13 +3443,22 @@ export default function PythonTools() {
                     borderTopRightRadius: 12,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ color: runtimeData.python.installed ? 'var(--primary)' : 'var(--text-muted)', opacity: 0.95 }}>
                       <TerminalSquare size={18} />
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '0.03em' }}>
                       Python Status
                     </div>
+                    {launcherDefaultRuntime?.version ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#6ea8ff', background: 'rgba(91,154,255,0.12)', border: '1px solid rgba(91,154,255,0.22)', borderRadius: 999, padding: '2px 9px', letterSpacing: '0.04em' }}>
+                        Default: Python {launcherDefaultRuntime.version}
+                      </span>
+                    ) : !runtimeData.python?.installed ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#f87171', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.22)', borderRadius: 999, padding: '2px 9px' }}>
+                        Not detected
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <div style={{ display: 'grid', gap: 16, marginTop: 16, width: '100%' }}>
@@ -3389,6 +3690,16 @@ export default function PythonTools() {
                         {pythonWebsiteUrl}
                         <ExternalLink size={13} />
                       </a>
+                      {!runtimeData.python?.installed && (
+                        <a
+                          href="https://www.python.org/downloads/"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.1)', color: '#fca5a5', fontSize: 12, fontWeight: 800, textDecoration: 'none', letterSpacing: '0.03em' }}
+                        >
+                          <ExternalLink size={13} /> Download Python
+                        </a>
+                      )}
 
                       <button
                         type="button"
@@ -3438,6 +3749,7 @@ export default function PythonTools() {
               {showMainCards ? (
               <>
               <div
+                ref={venvCardRef}
                 style={{
                   background: venvDetected ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)',
                   border: `1px solid ${venvDetected ? 'rgba(34,197,94,0.28)' : 'var(--border)'}`,
@@ -4243,13 +4555,22 @@ export default function PythonTools() {
                     borderTopRightRadius: 12,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ color: uvInstalled ? '#a748b2' : '#f87171', opacity: 0.95 }}>
                       <Box size={18} />
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '0.03em' }}>
-                      UV Installation
+                      uv
                     </div>
+                    {uvInstalled && uvVersionLabel && uvVersionLabel !== 'Not available' ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#d88be0', background: 'rgba(167,72,178,0.12)', border: '1px solid rgba(167,72,178,0.22)', borderRadius: 999, padding: '2px 9px', letterSpacing: '0.04em', fontFamily: 'var(--font-mono)' }}>
+                        {uvVersionLabel}
+                      </span>
+                    ) : !uvInstalled ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#f87171', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.22)', borderRadius: 999, padding: '2px 9px' }}>
+                        Not installed
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <div style={{ marginTop: 12 }}>
@@ -4281,6 +4602,28 @@ export default function PythonTools() {
                         {runtimeLoading.uv ? 'Checking...' : 'Check'}
                       </button>
                 </div>
+
+                {!uvInstalled && (
+                  <div style={{ marginTop: 14, padding: '14px 16px', borderRadius: 10, border: '1px solid rgba(248,113,113,0.22)', background: 'rgba(248,113,113,0.05)', display: 'grid', gap: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#fca5a5', lineHeight: 1.5 }}>
+                      uv is not installed. Install it to enable virtual environment management, dependency syncing, and lockfile generation.
+                    </div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Quick install (PowerShell)</div>
+                      <code style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#e2e8f0', background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '6px 10px', display: 'block', lineHeight: 1.5 }}>
+                        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+                      </code>
+                    </div>
+                    <a
+                      href={uvInstallGuideUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#fca5a5', textDecoration: 'none', fontWeight: 700 }}
+                    >
+                      <ExternalLink size={12} /> Full installation guide
+                    </a>
+                  </div>
+                )}
 
                 <div style={{ display: 'grid', gap: 12, marginTop: 16, maxWidth: 860 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, alignItems: 'start' }}>
@@ -4343,9 +4686,14 @@ export default function PythonTools() {
                         <ExternalLink size={13} />
                       </a>
                       {!uvInstalled ? (
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#fca5a5' }}>
-                          Check website for installation!
-                        </div>
+                        <a
+                          href={uvInstallGuideUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.1)', color: '#fca5a5', fontSize: 12, fontWeight: 800, textDecoration: 'none', letterSpacing: '0.03em' }}
+                        >
+                          <ExternalLink size={13} /> Install uv
+                        </a>
                       ) : null}
                     </div>
                   </div>
@@ -4355,208 +4703,6 @@ export default function PythonTools() {
 
               {showMainCards ? (
               <>
-              <div
-                style={{
-                  background: projectDetected ? 'rgba(74,222,128,0.07)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${projectDetected ? 'rgba(74,222,128,0.28)' : 'var(--border)'}`,
-                  borderRadius: 12,
-                  padding: '16px 16px 16px 20px',
-                  position: 'relative',
-                  overflow: 'visible',
-                  boxShadow: projectDetected ? '0 0 18px rgba(74,222,128,0.12)' : 'none',
-                  width: '100%',
-                }}
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 4,
-                    background: projectDetected ? '#4ade80' : 'rgba(148,163,184,0.75)',
-                  }}
-                />
-                <button
-                  type="button"
-                  onMouseEnter={() => setProjectHelpOpen(true)}
-                  onMouseLeave={() => setProjectHelpOpen(false)}
-                  onFocus={() => setProjectHelpOpen(true)}
-                  onBlur={() => setProjectHelpOpen(false)}
-                  style={{
-                    position: 'absolute',
-                    top: 14,
-                    right: 14,
-                    width: 30,
-                    height: 30,
-                    borderRadius: 999,
-                    border: `1px solid ${projectDetected ? 'rgba(74,222,128,0.28)' : 'rgba(148,163,184,0.24)'}`,
-                    background: projectDetected ? 'rgba(74,222,128,0.08)' : 'rgba(148,163,184,0.08)',
-                    color: projectDetected ? '#86efac' : 'var(--text-muted)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'help',
-                    flexShrink: 0,
-                  }}
-                >
-                  <HelpCircle size={15} />
-                </button>
-                {projectHelpOpen ? (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 52,
-                      right: 14,
-                      width: 250,
-                      zIndex: 12,
-                      padding: '10px 12px',
-                      borderRadius: 10,
-                      border: '1px solid var(--border)',
-                      background: '#0f1726',
-                      boxShadow: '0 10px 24px rgba(0,0,0,0.35)',
-                    }}
-                  >
-                    <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-                      Check whether the project has a pyproject.toml configuration file. If it does, the project name, version, and file location will be indicated here.
-                    </div>
-                  </div>
-                ) : null}
-
-                <div
-                  style={{
-                    margin: '-16px -16px 0 -20px',
-                    padding: '14px 56px 12px 20px',
-                    background: projectDetected ? 'rgba(12,26,18,0.40)' : 'rgba(9,16,29,0.36)',
-                    borderBottom: `1px solid ${projectDetected ? 'rgba(74,222,128,0.22)' : 'rgba(148,163,184,0.18)'}`,
-                    borderTopLeftRadius: 12,
-                    borderTopRightRadius: 12,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ color: projectDetected ? '#4ade80' : 'var(--text-muted)', opacity: 0.95 }}>
-                      <FileCode2 size={18} />
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '0.03em' }}>
-                      Primary Manifest
-                    </div>
-                  </div>
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <button
-                        type="button"
-                        onClick={() => loadProjectConfig()}
-                        disabled={projectConfig.loading}
-                        style={{
-                          opacity: projectConfig.loading ? 0.65 : 1,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          minHeight: 32,
-                          width: 144,
-                          padding: '4px 12px',
-                          borderRadius: 8,
-                          border: '1px solid rgba(91,154,255,0.28)',
-                          background: 'rgba(91,154,255,0.10)',
-                          color: '#6ea8ff',
-                          fontSize: 11,
-                          fontWeight: 800,
-                          letterSpacing: '0.05em',
-                          textTransform: 'uppercase',
-                          cursor: projectConfig.loading ? 'default' : 'pointer',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {projectConfig.loading ? <RefreshCw size={14} className="spin" /> : null}
-                        {projectConfig.loading ? 'Checking...' : 'Check'}
-                      </button>
-                </div>
-
-                <div style={{ display: 'grid', gap: 12, marginTop: 16, maxWidth: 860 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Status" description="Whether a project configuration file is present and readable." />
-                      <div style={{ fontSize: 14, fontWeight: 800, color: projectDetected ? '#4ade80' : '#f59e0b' }}>
-                        {projectDetected ? 'Detected' : pythonSignalsDetected ? 'No pyproject.toml' : 'No Python signals'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Name" description="The project name declared in pyproject.toml." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-word' }}>
-                        {projectNameLabel}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Version" description="The project version declared in pyproject.toml." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-word' }}>
-                        {projectVersionLabel}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Row 2: Description | Req. Python | Last modified */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Description" description="The project description declared in pyproject.toml." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-word' }}>
-                        {projectDescriptionLabel}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Req. Python" description="The minimum Python version constraint declared in pyproject.toml via requires-python." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-word' }}>
-                        {projectRequiresPythonLabel}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Modified" description="When pyproject.toml was last written to disk." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6 }}>
-                        {projectMtime ? formatDateTime(projectMtime) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Row 3: Build backend | Dependencies | Edit shortcut */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Build backend" description="The build-system backend declared in pyproject.toml, e.g. hatchling or setuptools. Controls how the package is built." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6 }}>
-                        {projectBuildBackend ?? <span style={{ color: 'var(--text-muted)' }}>Not declared</span>}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                      <HoverInfoLabel label="Dependencies" description="Direct dependencies declared in pyproject.toml, broken down by section." />
-                      <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-mono)', lineHeight: 1.6 }}>
-                        {projectDirectDepCount == null
-                          ? <span style={{ color: 'var(--text-muted)' }}>—</span>
-                          : <span>
-                              {projectDirectDepCount} direct
-                              {projectGroupCountParts.length > 0 && (
-                                <span style={{ color: 'var(--text-muted)' }}>{' · '}{projectGroupCountParts.join(' · ')}</span>
-                              )}
-                            </span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Validation warnings */}
-                  {(projectNameIsPlaceholder || projectVersionIsPlaceholder) && projectDetected && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 8, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: 12, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>
-                      <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                      {[
-                        projectNameIsPlaceholder && 'name is still the Launchline placeholder',
-                        projectVersionIsPlaceholder && 'version is still the default 0.1.0',
-                      ].filter(Boolean).join(' · ')}
-                      {' — update these in the editor before publishing.'}
-                    </div>
-                  )}
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-                    <HoverInfoLabel label="Location" description="The filesystem path to the active pyproject.toml file." />
-                    <SingleLineCopyValue value={projectLocationLabel} onCopy={copyTerminalText} onOpenFolder={openFolderForPath} />
-                  </div>
-                </div>
-              </div>
               <div
                 style={{
                   background: dependencyCount > 0 ? 'rgba(251,191,36,0.07)' : 'rgba(255,255,255,0.03)',
@@ -4850,360 +4996,73 @@ export default function PythonTools() {
         ) : null}
         {showMainCards ? (
         <>
+        <div ref={pyprojectCardRef}>
         <ControlCard
-          title="Environment manifests"
-          subtitle="Registry of the primary root manifest and any specialized secondary manifests. The primary manifest is live; secondary entries establish where future isolated environments should live."
-        >
-          <div style={{ display: 'grid', gap: 14 }}>
-            {environmentActionMessage ? (
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  border: `1px solid ${environmentActionMessage.tone === 'warn' ? 'rgba(251,191,36,0.18)' : 'rgba(74,222,128,0.18)'}`,
-                  background: environmentActionMessage.tone === 'warn' ? 'rgba(251,191,36,0.08)' : 'rgba(74,222,128,0.08)',
-                  color: environmentActionMessage.tone === 'warn' ? '#fbbf24' : '#86efac',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                {environmentActionMessage.text}
-              </div>
-            ) : null}
-            <div style={{ borderRadius: 12, border: '1px solid rgba(74,222,128,0.14)', background: 'rgba(10,15,26,0.42)', overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '180px 92px minmax(220px, 1fr) minmax(160px, 0.9fr) 92px', gap: 0, background: 'rgba(12,26,18,0.4)', borderBottom: '1px solid rgba(74,222,128,0.14)' }}>
-                {['Environment', 'Type', 'Manifest path', 'Purpose', 'Select'].map((label) => (
-                  <div key={label} style={{ padding: '8px 12px', fontSize: 10, fontWeight: 800, color: '#86efac', letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-                    {label}
-                  </div>
-                ))}
-              </div>
-              {environmentRegistry.map((environment, index) => {
-                const isSelected = environment.id === selectedEnvironmentId;
-                const rowBg = isSelected ? 'rgba(91,154,255,0.08)' : index % 2 === 1 ? 'rgba(74,222,128,0.03)' : 'transparent';
-                const rowBorder = isSelected ? 'rgba(91,154,255,0.14)' : 'rgba(74,222,128,0.08)';
-                const cell = {
-                  background: rowBg,
-                  borderBottom: `1px solid ${rowBorder}`,
-                  padding: '9px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  minWidth: 0,
-                };
-                return (
-                  <div key={environment.id} style={{ display: 'contents' }}>
-                    <div style={{ ...cell, gap: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{environment.title}</span>
-                    </div>
-                    <div style={cell}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: environment.kind === 'primary' ? '#4ade80' : '#fbbf24', background: environment.kind === 'primary' ? 'rgba(74,222,128,0.08)' : 'rgba(251,191,36,0.08)', border: `1px solid ${environment.kind === 'primary' ? 'rgba(74,222,128,0.18)' : 'rgba(251,191,36,0.18)'}`, borderRadius: 999, padding: '2px 7px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                        {environment.kind}
-                      </span>
-                    </div>
-                    <div style={cell}>
-                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={environment.manifestPath}>
-                        {environment.manifestPath}
-                      </span>
-                    </div>
-                    <div style={cell}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                        {environment.purpose}
-                      </span>
-                    </div>
-                    <div style={{ ...cell, justifyContent: 'flex-start' }}>
-                      <button
-                        type="button"
-                        onClick={() => selectEnvironmentManifest(environment.id)}
-                        style={{
-                          minHeight: 28,
-                          minWidth: 64,
-                          padding: '0 10px',
-                          borderRadius: 8,
-                          border: isSelected ? '1px solid rgba(91,154,255,0.28)' : '1px solid rgba(255,255,255,0.08)',
-                          background: isSelected ? 'rgba(91,154,255,0.12)' : 'rgba(255,255,255,0.03)',
-                          color: isSelected ? '#8bb6ff' : 'var(--text-muted)',
-                          fontSize: 11,
-                          fontWeight: 800,
-                          letterSpacing: '0.04em',
-                          textTransform: 'uppercase',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {isSelected ? 'Active' : 'Select'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {showEnvironmentComposer ? (
-              <div style={{ padding: '14px 16px', borderRadius: 12, border: '1px solid rgba(74,222,128,0.14)', background: 'rgba(74,222,128,0.04)', display: 'grid', gap: 12 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: '#86efac', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  New secondary manifest
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 0.8fr) minmax(120px, 0.4fr)', gap: 10 }}>
-                  <input
-                    value={newEnvironmentDraft.title}
-                    onChange={(event) => setNewEnvironmentDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    placeholder="Environment name"
-                    style={{ ...inputStyle, padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)' }}
-                  />
-                  <input
-                    value={newEnvironmentDraft.pythonVersion}
-                    onChange={(event) => setNewEnvironmentDraft((prev) => ({ ...prev, pythonVersion: event.target.value }))}
-                    placeholder="Python version"
-                    style={{ ...inputStyle, padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)' }}
-                  />
-                </div>
-                <textarea
-                  value={newEnvironmentDraft.purpose}
-                  onChange={(event) => setNewEnvironmentDraft((prev) => ({ ...prev, purpose: event.target.value }))}
-                  placeholder="Purpose of this specialized environment..."
-                  rows={2}
-                  style={{ ...inputStyle, resize: 'vertical', padding: '10px 12px', fontSize: 12, background: 'rgba(255,255,255,0.03)' }}
-                />
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={createEnvironmentManifestEntry}
-                    disabled={!newEnvironmentDraft.title.trim()}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(74,222,128,0.18)', background: newEnvironmentDraft.title.trim() ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.03)', color: newEnvironmentDraft.title.trim() ? '#86efac' : 'var(--text-muted)', fontSize: 12, fontWeight: 700, cursor: newEnvironmentDraft.title.trim() ? 'pointer' : 'not-allowed' }}
-                  >
-                    <Plus size={13} /> Add manifest
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowEnvironmentComposer(false)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    <XCircle size={13} /> Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Selected environment: <span style={{ color: 'var(--text)', fontWeight: 700 }}>{selectedEnvironmentManifest?.title || 'Not available'}</span>
-                {selectedEnvironmentManifest?.kind !== 'primary' ? ' — registry and package planning are active now; manifest file creation and dedicated venv provisioning come next.' : ''}
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowEnvironmentComposer((prev) => !prev)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(74,222,128,0.18)', background: showEnvironmentComposer ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.03)', color: showEnvironmentComposer ? '#86efac' : 'var(--text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                <Plus size={13} /> Add secondary manifest
-              </button>
-            </div>
-          </div>
-        </ControlCard>
-        <ControlCard
-          title="Package assignment"
-          subtitle="Assign curated inventory packages to the selected manifest. The primary manifest reflects the live root pyproject; secondary manifests are planned package maps until their files are provisioned."
-        >
-          <div style={{ display: 'grid', gap: 14 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 0.95fr) minmax(220px, 1.15fr) 120px 140px auto', gap: 10, alignItems: 'end' }}>
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Inventory package
-                </div>
-                <div>
-                  <input
-                    list="python-catalog-package-options"
-                    value={assignmentPackageName}
-                    onChange={(event) => handleAssignmentPackageSelection(event.target.value)}
-                    placeholder={selectedPackageName || 'Choose a package from inventory'}
-                    style={{ ...inputStyle, width: '100%', padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)' }}
-                  />
-                  <datalist id="python-catalog-package-options">
-                    {packageCatalog.map((pkg) => (
-                      <option key={pkg.name} value={pkg.name} />
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Install spec
-                </div>
-                <input
-                  value={assignmentInstallSpec}
-                  onChange={(event) => setAssignmentInstallSpec(event.target.value)}
-                  placeholder={(selectedAssignmentPackage?.defaultInstallSpec || selectedPackage?.defaultInstallSpec || selectedPackageName || 'package-name')}
-                  style={{ ...inputStyle, padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)', fontFamily: 'var(--font-mono)' }}
-                />
-              </div>
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Scope
-                </div>
-                <select
-                  value={assignmentScope}
-                  onChange={(event) => setAssignmentScope(event.target.value)}
-                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 12, padding: '8px 10px', outline: 'none', cursor: 'pointer' }}
-                >
-                  <option value="base">Base</option>
-                  <option value="group">Group</option>
-                </select>
-              </div>
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Group
-                </div>
-                <input
-                  value={assignmentGroup}
-                  onChange={(event) => setAssignmentGroup(event.target.value)}
-                  disabled={assignmentScope !== 'group'}
-                  placeholder={assignmentScope === 'group' ? 'group name' : 'not needed'}
-                  style={{ ...inputStyle, padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)', opacity: assignmentScope === 'group' ? 1 : 0.6 }}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={assignPackageToEnvironmentManifest}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(74,222,128,0.18)', background: 'rgba(74,222,128,0.12)', color: '#86efac', fontSize: 12, fontWeight: 700, cursor: 'pointer', minHeight: 36 }}
-              >
-                <Plus size={13} /> Assign package
-              </button>
-            </div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Use the install spec field for extras and version rules, for example <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>unstructured[pdf]</span> or <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pandas&gt;=2,&lt;3</span>.
-              </div>
-              {selectedAssignmentPackage?.installVariants?.length ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                    Variant presets
-                  </span>
-                  {selectedAssignmentPackage.installVariants.map((variant) => {
-                    const isActive = (assignmentInstallSpec || selectedAssignmentPackage.defaultInstallSpec || selectedAssignmentPackage.name) === variant.spec;
-                    return (
-                      <button
-                        key={variant.id}
-                        type="button"
-                        onClick={() => setAssignmentInstallSpec(variant.spec)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '4px 9px',
-                          borderRadius: 999,
-                          border: isActive ? '1px solid rgba(74,222,128,0.22)' : '1px solid rgba(255,255,255,0.08)',
-                          background: isActive ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.03)',
-                          color: isActive ? '#86efac' : 'var(--text-secondary)',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                        title={variant.spec}
-                      >
-                        {variant.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {(assignmentInstallSpec || selectedAssignmentPackage?.defaultInstallSpec || selectedPackage?.defaultInstallSpec) ? (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  Selected spec: <span style={{ color: 'var(--text)' }}>{assignmentInstallSpec || selectedAssignmentPackage?.defaultInstallSpec || selectedPackage?.defaultInstallSpec}</span>
-                </div>
-              ) : null}
-            </div>
-            <div style={{ borderRadius: 12, border: '1px solid rgba(74,222,128,0.14)', background: 'rgba(10,15,26,0.42)', overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 0.9fr) minmax(220px, 1.1fr) 108px 96px 96px', gap: 0 }}>
-                {['Package', 'Install spec', 'Scope', 'Source', 'State'].map((label) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '8px 12px',
-                      fontSize: 10,
-                      fontWeight: 800,
-                      color: '#86efac',
-                      letterSpacing: '0.08em',
-                      textTransform: 'uppercase',
-                      whiteSpace: 'nowrap',
-                      background: 'rgba(12,26,18,0.4)',
-                      borderBottom: '1px solid rgba(74,222,128,0.14)',
-                    }}
-                  >
-                    {label}
-                  </div>
-                ))}
-                {selectedManifestPackageRows.length > 0 ? (
-                  selectedManifestPackageRows.map((pkg, index) => {
-                    const rowBg = index % 2 === 1 ? 'rgba(74,222,128,0.03)' : 'transparent';
-                    const cell = {
-                      background: rowBg,
-                      borderBottom: '1px solid rgba(74,222,128,0.08)',
-                      padding: '9px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      minWidth: 0,
-                    };
-                    const removable = pkg.state !== 'declared';
-                    return (
-                      <div key={`${pkg.name}-${pkg.dependencySpec || pkg.name}-${pkg.scope}-${pkg.group || 'base'}`} style={{ display: 'contents' }}>
-                        <div style={{ ...cell, justifyContent: 'space-between', gap: 10 }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {pkg.name}
-                            </div>
-                            {pkg.group ? (
-                              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                                {pkg.group}
-                              </div>
-                            ) : null}
-                          </div>
-                          {removable ? (
-                            <button
-                              type="button"
-                              onClick={() => removeAssignedPackageFromManifest(pkg.name, pkg.dependencySpec || pkg.name, pkg.scope, pkg.group)}
-                              style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: 0, flexShrink: 0 }}
-                              title="Remove assignment"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          ) : null}
-                        </div>
-                        <div style={cell}>
-                          <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pkg.dependencySpec || pkg.name}>
-                            {pkg.dependencySpec || pkg.name}
-                          </span>
-                        </div>
-                        <div style={cell}>
-                          <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                            {pkg.scope}
-                          </span>
-                        </div>
-                        <div style={cell}>
-                          <span style={{ fontSize: 11, color: pkg.source === 'pyproject' ? '#8bb6ff' : 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                            {pkg.source}
-                          </span>
-                        </div>
-                        <div style={cell}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: pkg.state === 'declared' ? '#4ade80' : '#fbbf24', background: pkg.state === 'declared' ? 'rgba(74,222,128,0.08)' : 'rgba(251,191,36,0.08)', border: `1px solid ${pkg.state === 'declared' ? 'rgba(74,222,128,0.18)' : 'rgba(251,191,36,0.18)'}`, borderRadius: 999, padding: '2px 7px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            {pkg.state}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div style={{ gridColumn: '1 / -1', padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>
-                    No packages are mapped to the selected manifest yet.
-                  </div>
-                )}
-              </div>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-              Primary manifest rows marked <span style={{ color: '#4ade80', fontWeight: 700 }}>declared</span> come from the live root `pyproject.toml`. Rows marked <span style={{ color: '#fbbf24', fontWeight: 700 }}>planned</span> are staged manifest assignments in the registry and are the next candidates for actual file-backed provisioning.
-            </div>
-          </div>
-        </ControlCard>
-        <ControlCard
-          title="Manage pyproject.toml dependencies"
-          subtitle="Add or remove packages directly from the root pyproject.toml. Changes take effect after running Sync."
+          title="pyproject.toml"
+          subtitle="Manage project dependencies and Python version constraints. Run Sync to apply changes to the environment."
         >
           <div style={{ display: 'grid', gap: 16 }}>
+            {/* Metadata strip */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', borderRadius: 9, background: projectDetected ? 'rgba(74,222,128,0.05)' : 'rgba(255,255,255,0.025)', border: `1px solid ${projectDetected ? 'rgba(74,222,128,0.16)' : 'rgba(255,255,255,0.07)'}`, flexWrap: 'wrap', minHeight: 36 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 800, color: projectDetected ? '#4ade80' : '#f59e0b', flexShrink: 0 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: projectDetected ? '#4ade80' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
+                {projectDetected ? 'Detected' : pythonSignalsDetected ? 'No pyproject.toml' : 'No Python signals'}
+              </span>
+              {projectDetected && (
+                <>
+                  <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text)', fontWeight: 600 }}>{projectNameLabel}</span>
+                  {projectVersionLabel && projectVersionLabel !== '—' && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 5, padding: '1px 7px', fontFamily: 'var(--font-mono)' }}>
+                      {projectVersionLabel}
+                    </span>
+                  )}
+                </>
+              )}
+              <div style={{ flex: 1 }} />
+              {projectDetected && projectLocationLabel && projectLocationLabel !== 'Not available' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <button
+                    type="button"
+                    onClick={() => openFolderForPath(projectLocationLabel)}
+                    title="Open containing folder"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '3px 5px', display: 'flex', alignItems: 'center', opacity: 0.55, borderRadius: 5 }}
+                  >
+                    <FolderOpen size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => copyTerminalText(projectLocationLabel)}
+                    title="Copy path"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '3px 5px', display: 'flex', alignItems: 'center', opacity: 0.55, borderRadius: 5 }}
+                  >
+                    <Copy size={13} />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => loadProjectConfig()}
+                disabled={projectConfig.loading}
+                title="Refresh pyproject.toml"
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: projectConfig.loading ? 'default' : 'pointer', padding: '3px 5px', display: 'flex', alignItems: 'center', opacity: projectConfig.loading ? 0.35 : 0.55, borderRadius: 5 }}
+              >
+                <RefreshCw size={13} className={projectConfig.loading ? 'spin' : ''} />
+              </button>
+            </div>
+
+            {/* Validation warning */}
+            {(projectNameIsPlaceholder || projectVersionIsPlaceholder) && projectDetected && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 8, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: 12, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>
+                <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                {[
+                  projectNameIsPlaceholder && 'name is still the Launchline placeholder',
+                  projectVersionIsPlaceholder && 'version is still the default 0.1.0',
+                ].filter(Boolean).join(' · ')}
+                {' — update these before publishing.'}
+              </div>
+            )}
+
             {/* Planned packages suggestion row */}
             {(() => {
               const planned = selectedManifestPackageRows.filter(p => p.state === 'planned');
@@ -5250,43 +5109,115 @@ export default function PythonTools() {
               );
             })()}
 
-            {/* Add dependency row */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ display: 'grid', gap: 6, flex: '1 1 200px', minWidth: 160 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Package spec
+            {/* Unified form panel */}
+            <div style={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 10, overflow: 'visible', background: 'rgba(255,255,255,0.015)' }}>
+              {/* requires-python row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, width: 140, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.01em' }}>
+                    requires-python
+                  </span>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setOpenTip('requires-python')}
+                    onMouseLeave={() => setOpenTip(null)}
+                    style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', cursor: 'help', color: 'var(--text-muted)', opacity: 0.5, flexShrink: 0 }}
+                  >
+                    <HelpCircle size={12} />
+                  </button>
+                  {openTip === 'requires-python' && (
+                    <div style={{ position: 'absolute', top: 22, left: 0, width: 272, zIndex: 20, padding: '13px 15px', borderRadius: 12, border: '1px solid rgba(192,132,252,0.35)', background: '#0d1829', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#e879f9', marginBottom: 6 }}>requires-python</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                        Specifies which Python versions are compatible with this project. Uses PEP 440 specifiers — e.g. <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{'>=3.11,<3.14'}</span>. uv reads this when creating or syncing the environment.
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <input
+                  value={requiresPythonDraft}
+                  onChange={e => setRequiresPythonDraft(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && saveRequiresPython()}
+                  placeholder="e.g. >=3.12"
+                  style={{ ...inputStyle, padding: '6px 10px', fontSize: 12, background: 'rgba(255,255,255,0.04)', fontFamily: 'var(--font-mono)', width: 148, flexShrink: 0 }}
+                />
+                <button
+                  type="button"
+                  onClick={saveRequiresPython}
+                  disabled={requiresPythonSaving || !requiresPythonDraft.trim() || requiresPythonDraft.trim() === projectConfig.data?.metadata?.requiresPython}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(139,182,255,0.2)', background: 'rgba(139,182,255,0.08)', color: '#8bb6ff', fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0, opacity: requiresPythonSaving || !requiresPythonDraft.trim() || requiresPythonDraft.trim() === projectConfig.data?.metadata?.requiresPython ? 0.4 : 1 }}
+                >
+                  {requiresPythonSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+
+              {/* Add dependency row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, width: 140, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
+                    Add package
+                  </span>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setOpenTip('add-package')}
+                    onMouseLeave={() => setOpenTip(null)}
+                    style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', cursor: 'help', color: 'var(--text-muted)', opacity: 0.5, flexShrink: 0 }}
+                  >
+                    <HelpCircle size={12} />
+                  </button>
+                  {openTip === 'add-package' && (
+                    <div style={{ position: 'absolute', top: 22, left: 0, width: 272, zIndex: 20, padding: '13px 15px', borderRadius: 12, border: '1px solid rgba(192,132,252,0.35)', background: '#0d1829', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#e879f9', marginBottom: 6 }}>Add package</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                        Enter a package name or PEP 508 dependency spec. Examples: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>requests</span>, <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pymupdf{'>='}1.24</span>. Written directly to <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pyproject.toml</span> — run Sync to install.
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <input
                   value={addDepInput}
                   onChange={e => setAddDepInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && addDependency()}
                   placeholder="e.g. pymupdf>=1.24"
-                  style={{ ...inputStyle, padding: '8px 10px', fontSize: 12, background: 'rgba(255,255,255,0.03)' }}
+                  style={{ ...inputStyle, padding: '6px 10px', fontSize: 12, background: 'rgba(255,255,255,0.04)', flex: '1 1 160px', minWidth: 0, maxWidth: 300 }}
                 />
-              </div>
-              <div style={{ display: 'grid', gap: 6, flex: '0 0 auto', minWidth: 120 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Section
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  <select
+                    value={addDepGroup}
+                    onChange={e => setAddDepGroup(e.target.value)}
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text)', fontSize: 12, padding: '6px 10px', outline: 'none', cursor: 'pointer', width: 110 }}
+                  >
+                    <option value="base">base</option>
+                    {Object.keys(projectConfig.data?.groups || {}).map(g => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setOpenTip('section')}
+                    onMouseLeave={() => setOpenTip(null)}
+                    style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', cursor: 'help', color: 'var(--text-muted)', opacity: 0.5 }}
+                  >
+                    <HelpCircle size={12} />
+                  </button>
+                  {openTip === 'section' && (
+                    <div style={{ position: 'absolute', top: 22, right: 0, width: 280, zIndex: 20, padding: '13px 15px', borderRadius: 12, border: '1px solid rgba(192,132,252,0.35)', background: '#0d1829', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#e879f9', marginBottom: 6 }}>Section</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>base</span> adds to <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>[project.dependencies]</span>, installed in every environment. Named groups go into <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>[dependency-groups]</span> and can be synced selectively with <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>uv sync --group {'<'}name{'>'}</span>.
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <select
-                  value={addDepGroup}
-                  onChange={e => setAddDepGroup(e.target.value)}
-                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 12, padding: '8px 10px', outline: 'none', cursor: 'pointer' }}
+                <button
+                  type="button"
+                  onClick={addDependency}
+                  disabled={addDepSaving || !addDepInput.trim()}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(74,222,128,0.18)', background: 'rgba(74,222,128,0.12)', color: '#86efac', fontSize: 12, fontWeight: 700, cursor: addDepSaving || !addDepInput.trim() ? 'not-allowed' : 'pointer', opacity: addDepSaving || !addDepInput.trim() ? 0.5 : 1, flexShrink: 0 }}
                 >
-                  <option value="base">base</option>
-                  {Object.keys(projectConfig.data?.groups || {}).map(g => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
+                  <Plus size={13} /> {addDepSaving ? 'Adding…' : 'Add'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={addDependency}
-                disabled={addDepSaving || !addDepInput.trim()}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(74,222,128,0.18)', background: 'rgba(74,222,128,0.12)', color: '#86efac', fontSize: 12, fontWeight: 700, cursor: addDepSaving || !addDepInput.trim() ? 'not-allowed' : 'pointer', opacity: addDepSaving || !addDepInput.trim() ? 0.5 : 1, minHeight: 36 }}
-              >
-                <Plus size={13} /> {addDepSaving ? 'Adding…' : 'Add'}
-              </button>
             </div>
 
             {/* Status message */}
@@ -5296,8 +5227,22 @@ export default function PythonTools() {
               </div>
             )}
 
-            {/* Current deps list */}
-            {projectConfig.data && (
+            {/* Dependency list — three distinct states */}
+            {!projectConfig.data ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderRadius: 10, border: '1px solid rgba(251,191,36,0.15)', background: 'rgba(251,191,36,0.04)' }}>
+                <AlertTriangle size={14} style={{ color: '#fbbf24', flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  No <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pyproject.toml</span> found in this workspace. Create one from the header card above to start declaring dependencies.
+                </span>
+              </div>
+            ) : (projectConfig.data.dependencies || []).length === 0 && Object.keys(projectConfig.data.groups || {}).length === 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+                <FileCode2 size={14} style={{ color: 'var(--text-muted)', flexShrink: 0, opacity: 0.5 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  No packages declared yet — add your first dependency using the form above.
+                </span>
+              </div>
+            ) : (
               <div style={{ display: 'grid', gap: 10 }}>
                 {/* Base dependencies */}
                 {(projectConfig.data.dependencies || []).length > 0 && (
@@ -5326,8 +5271,18 @@ export default function PythonTools() {
                 {/* Dependency groups */}
                 {Object.entries(projectConfig.data.groups || {}).map(([grpName, specs]) => (
                   <div key={grpName}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-                      Group: {grpName}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                        Group: {grpName}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => deleteGroup(grpName)}
+                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 4px', opacity: 0.6, display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}
+                        title={`Delete group "${grpName}"`}
+                      >
+                        <Trash2 size={12} /> Delete group
+                      </button>
                     </div>
                     <div style={{ borderRadius: 10, border: '1px solid rgba(74,222,128,0.14)', background: 'rgba(10,15,26,0.42)', overflow: 'hidden' }}>
                       {(specs || []).map((spec, i) => (
@@ -5346,178 +5301,56 @@ export default function PythonTools() {
                     </div>
                   </div>
                 ))}
-
-                {(projectConfig.data.dependencies || []).length === 0 && Object.keys(projectConfig.data.groups || {}).length === 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '10px 0' }}>
-                    No dependencies declared in pyproject.toml yet.
-                  </div>
-                )}
               </div>
             )}
 
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-              Changes write directly to <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>pyproject.toml</span>. Run <span style={{ color: '#4ade80', fontWeight: 700 }}>Sync</span> afterward to install new packages or uninstall removed ones from the virtual environment.
-            </div>
-          </div>
-        </ControlCard>
-        <ControlCard
-          title="Environment strategy"
-          subtitle="Keep one primary app venv by default. Use this advisory layer to decide when a workload deserves its own specialized environment."
-        >
-          <div style={{ display: 'grid', gap: 14 }}>
-            <div
-              style={{
-                display: 'grid',
-                gap: 10,
-                padding: '14px 16px',
-                borderRadius: 12,
-                border: `1px solid ${strategySummaryAppearance.border}`,
-                background: strategySummaryAppearance.background,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
-                  {workspaceVenvStrategy.summaryTitle}
+            {/* Create group — only shown when pyproject.toml exists */}
+            {projectConfig.data && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.05)', flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, width: 140, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
+                    New group
+                  </span>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setOpenTip('new-group')}
+                    onMouseLeave={() => setOpenTip(null)}
+                    style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', cursor: 'help', color: 'var(--text-muted)', opacity: 0.5, flexShrink: 0 }}
+                  >
+                    <HelpCircle size={12} />
+                  </button>
+                  {openTip === 'new-group' && (
+                    <div style={{ position: 'absolute', bottom: 22, left: 0, width: 272, zIndex: 20, padding: '13px 15px', borderRadius: 12, border: '1px solid rgba(192,132,252,0.35)', background: '#0d1829', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#e879f9', marginBottom: 6 }}>Dependency groups</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                        Groups let you separate optional or dev-only packages from the core project. Install selectively with <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>uv sync --group {'<'}name{'>'}</span>. Common names: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>dev</span>, <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>test</span>, <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>lint</span>.
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '4px 9px',
-                    borderRadius: 999,
-                    border: `1px solid ${strategySummaryAppearance.border}`,
-                    background: strategySummaryAppearance.background,
-                    color: strategySummaryAppearance.color,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: '0.05em',
-                    textTransform: 'uppercase',
-                  }}
+                <input
+                  value={newGroupName}
+                  onChange={e => setNewGroupName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && createGroup()}
+                  placeholder="e.g. dev, test, lint"
+                  style={{ ...inputStyle, padding: '6px 10px', fontSize: 12, background: 'rgba(255,255,255,0.04)', fontFamily: 'var(--font-mono)', width: 160, flexShrink: 0 }}
+                />
+                <button
+                  type="button"
+                  onClick={createGroup}
+                  disabled={newGroupSaving || !newGroupName.trim()}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(251,191,36,0.2)', background: 'rgba(251,191,36,0.06)', color: '#fbbf24', fontSize: 12, fontWeight: 700, cursor: newGroupSaving || !newGroupName.trim() ? 'not-allowed' : 'pointer', opacity: newGroupSaving || !newGroupName.trim() ? 0.4 : 1, flexShrink: 0 }}
                 >
-                  {strategySummaryAppearance.label}
-                </div>
+                  <Plus size={13} /> {newGroupSaving ? 'Creating…' : 'Create group'}
+                </button>
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                {workspaceVenvStrategy.summaryNote}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                Advisory only: the current create, rebuild, sync, and delete controls still operate on the primary project venv. Secondary environments are recommendations for future specialization, not automatic actions.
-              </div>
-            </div>
-
-            <div style={{ borderRadius: 12, border: '1px solid rgba(74,222,128,0.14)', background: 'rgba(10,15,26,0.42)', overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '180px 108px 210px 150px minmax(280px, 1fr)', gap: 0, background: 'rgba(15,28,18,0.72)', borderBottom: '1px solid rgba(74,222,128,0.14)' }}>
-                {['Workload', 'Coverage', 'Recommendation', 'Suggested profile', 'Why'].map((label) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '8px 12px',
-                      fontSize: 10,
-                      fontWeight: 800,
-                      color: '#86efac',
-                      letterSpacing: '0.08em',
-                      textTransform: 'uppercase',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {label}
-                  </div>
-                ))}
-              </div>
-              {workspaceVenvStrategy.workloads.map((workload, index) => {
-                const appearance = getRecommendationAppearance(workload.outcome);
-                return (
-                  <div
-                    key={workload.manifestId || workload.title}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '180px 108px 210px 150px minmax(280px, 1fr)',
-                      gap: 0,
-                      borderTop: index === 0 ? 'none' : '1px solid rgba(74,222,128,0.08)',
-                    }}
-                  >
-                    <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>
-                      {workload.title}
-                    </div>
-                    <div style={{ padding: '10px 12px', fontSize: 12, fontFamily: 'var(--font-mono)', color: workload.coverage.missingRequiredCount > 0 ? '#fbbf24' : '#86efac' }}>
-                      {workload.coverage.readyRequiredCount}/{workload.coverage.requiredCount}
-                    </div>
-                    <div style={{ padding: '10px 12px' }}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          padding: '3px 8px',
-                          borderRadius: 999,
-                          border: `1px solid ${appearance.border}`,
-                          background: appearance.background,
-                          color: appearance.color,
-                          fontSize: 10,
-                          fontWeight: 700,
-                          letterSpacing: '0.05em',
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {appearance.label}
-                      </span>
-                    </div>
-                    <div style={{ padding: '10px 12px', fontSize: 12, color: '#4ade80', fontWeight: 700 }}>
-                      {workload.suggestedProfile.label}
-                    </div>
-                    <div style={{ padding: '10px 12px', minWidth: 0 }}>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                        {workload.rationale}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                        {workload.traits.map((trait) => (
-                          <span
-                            key={trait.id}
-                            style={{
-                              padding: '2px 7px',
-                              borderRadius: 999,
-                              border: '1px solid rgba(74,222,128,0.12)',
-                              background: 'rgba(74,222,128,0.05)',
-                              color: '#86efac',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              letterSpacing: '0.04em',
-                              textTransform: 'uppercase',
-                            }}
-                          >
-                            {trait.label}
-                          </span>
-                        ))}
-                        {workload.coverage.missingRequiredCount > 0 ? (
-                          <span style={{ fontSize: 11, color: '#fbbf24' }}>
-                            Missing in primary venv: {workload.coverage.missingRequiredPackages.join(', ')}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            )}
           </div>
         </ControlCard>
-        <div style={{ display: 'grid', gap: 12 }}>
-          <ToggleRow
-            title="Sync environment on app launch"
-            description="Good when Launchline should auto-prepare its Python environment before tool usage."
-            checked={!!pythonTools.syncOnLaunch}
-            onChange={(value) => updatePythonTools('syncOnLaunch', value)}
-          />
-          <ToggleRow
-            title="Install development dependencies"
-            description="Enable dev groups by default when the app is intended to ship with local tooling or evaluation scripts."
-            checked={!!pythonTools.installDevDependencies}
-            onChange={(value) => updatePythonTools('installDevDependencies', value)}
-          />
         </div>
         </>
         ) : null}
-      </Section>
+      </SectionWrapper>
       </>
     );
   }
@@ -5526,7 +5359,7 @@ export default function PythonTools() {
     return renderEnvironmentSection({
       showInstallCards: true,
       showMainCards: false,
-      sectionTitle: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Box size={16} /> Installations</span>,
+      noWrapper: true,
     });
   }
 
@@ -5809,19 +5642,11 @@ export default function PythonTools() {
           stickyTop={0}
         />
       </div>
-      <div style={{ padding: '16px 28px 0', flexShrink: 0 }}>
-        <WorkspaceBanner
-          label="Python Workspace"
-          title={workspaceProjectDetected ? 'Python project detected' : workspacePythonSignalsDetected ? 'Python signals detected' : 'No Python project detected yet'}
-          description={workspacePythonDescription}
-          dense
-          showActions={false}
-        />
-      </div>
+
       <div className="custom-scrollbar" style={pageContentStyle}>
 
         {activeTab === 'environment' ? (
-          <>{renderEnvironmentSection({ showInstallCards: false, showMainCards: true })}</>
+          <>{renderEnvironmentSection({ showInstallCards: false, showMainCards: true, noWrapper: true })}</>
         ) : activeTab === 'installs' ? (
           <>{renderInstallSection()}</>
         ) : (

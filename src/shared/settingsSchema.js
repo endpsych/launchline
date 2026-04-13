@@ -170,8 +170,6 @@ const SETTINGS_DEFAULT = {
     projectEnvironment: 'scripts/.venv',
     interpreterPath: 'scripts/.venv/Scripts/python.exe',
     defaultRunCommand: 'uv run',
-    syncOnLaunch: true,
-    installDevDependencies: true,
     enableTaskRunner: true,
     allowAiPackages: true,
     catalogEntries: [],

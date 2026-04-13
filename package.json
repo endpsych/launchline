@@ -11,8 +11,8 @@
   "scripts": {
     "prestart": "node scripts/check-runtime.cjs",
     "prebuild": "node scripts/check-runtime.cjs",
-    "start": "concurrently \"npm run react\" \"wait-on http://localhost:3001 && electron .\"",
-    "react": "set \"BROWSER=none\" && set \"PORT=3001\" && react-scripts start",
+    "start": "concurrently \"npm run react\" \"wait-on http://localhost:3012 && electron .\"",
+    "react": "set \"BROWSER=none\" && set \"PORT=3012\" && react-scripts start",
     "build": "react-scripts build && electron-builder",
     "electron": "electron .",
     "dev": "rmdir /s /q node_modules\\.cache 2>nul & npm start",
