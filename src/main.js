@@ -4195,105 +4195,316 @@ ipcMain.handle('python:llm-ops-status', async () => {
       .filter(Boolean);
 
     const sourceEntries = textEntries.filter((entry) => SOURCE_EXTENSIONS.has(entry.ext) || ['Dockerfile', 'Jenkinsfile', 'Makefile'].includes(entry.name));
-    const dependencyTexts = [];
+    const dependencyEntries = [];
     for (const candidate of ['package.json', 'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'uv.lock', 'Cargo.toml', 'go.mod', 'DESCRIPTION']) {
       const fullPath = path.join(workspaceRoot, candidate);
       if (!fs.existsSync(fullPath)) continue;
       try {
-        dependencyTexts.push(fs.readFileSync(fullPath, 'utf8'));
+        dependencyEntries.push({
+          rel: candidate,
+          content: fs.readFileSync(fullPath, 'utf8'),
+        });
       } catch {}
     }
-    const envTexts = [];
+    const envEntries = [];
     for (const candidate of ['.env.example', '.env.sample', '.env.template']) {
       const fullPath = path.join(workspaceRoot, candidate);
       if (!fs.existsSync(fullPath)) continue;
       try {
-        envTexts.push(fs.readFileSync(fullPath, 'utf8'));
+        envEntries.push({
+          rel: candidate,
+          content: fs.readFileSync(fullPath, 'utf8'),
+        });
       } catch {}
     }
-    const dependencyText = dependencyTexts.join('\n').toLowerCase();
-    const envText = envTexts.join('\n').toLowerCase();
+    const dependencyText = dependencyEntries.map((entry) => entry.content).join('\n').toLowerCase();
+    const envText = envEntries.map((entry) => entry.content).join('\n').toLowerCase();
     const sourceText = sourceEntries.map((entry) => entry.content).join('\n');
     const lowerSourceText = sourceText.toLowerCase();
 
-    const providerDefs = [
+    function extractPatternMatches(content, pattern, limit = 4) {
+      try {
+        const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+        const regex = new RegExp(pattern.source, flags);
+        const matches = [];
+        let match;
+        while ((match = regex.exec(content)) && matches.length < limit) {
+          const value = String(match[0] || '').trim();
+          if (value && !matches.includes(value)) matches.push(value);
+          if (match.index === regex.lastIndex) regex.lastIndex += 1;
+        }
+        return matches;
+      } catch {
+        return [];
+      }
+    }
+
+    function collectSignalEvidence(entries, patterns) {
+      return entries
+        .map((entry) => {
+          const matches = patterns
+            .flatMap((pattern) => extractPatternMatches(entry.content, pattern))
+            .filter((value, index, array) => array.indexOf(value) === index)
+            .slice(0, 6);
+          if (!matches.length) return null;
+          return {
+            file: entry.rel,
+            absolutePath: path.join(workspaceRoot, entry.rel),
+            matches,
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 8);
+    }
+
+    function escapeRegex(value) {
+      return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function keywordPatterns(values) {
+      return (values || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .map((value) => new RegExp(escapeRegex(value), 'i'));
+    }
+
+    function summarizeHeuristics(provider) {
+      const dependencySummary = provider.dependencyKeywords?.length
+        ? provider.dependencyKeywords.join(', ')
+        : 'No dependency heuristics';
+      const envSummary = provider.envKeywords?.length
+        ? provider.envKeywords.join(', ')
+        : 'No env/config heuristics';
+      const sourceSummary = provider.sourceKeywords?.length
+        ? provider.sourceKeywords.join(', ')
+        : 'No source heuristics';
+      return `Dependency: ${dependencySummary}. Env: ${envSummary}. Source: ${sourceSummary}.`;
+    }
+
+    function slugifyProviderId(value) {
+      return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 48);
+    }
+
+    const llmSettings = readSettings().llmOperations || {};
+    const providerOverrides = llmSettings.providerHeuristicOverrides || {};
+
+    const builtinProviderDefs = [
       {
         id: 'openai',
         label: 'OpenAI',
-        depPatterns: [/["']openai["']/i],
-        envPatterns: [/openai_api_key/i, /openai_org/i, /openai_project/i],
-        codePatterns: [/\bopenai\b/i, /\bnew\s+openai\b/i, /responses\.create/i, /chat\.completions/i],
+        dependencyKeywords: ['openai'],
+        envKeywords: ['OPENAI_API_KEY', 'OPENAI_ORG', 'OPENAI_PROJECT'],
+        sourceKeywords: ['openai', 'new OpenAI', 'responses.create', 'chat.completions'],
       },
       {
         id: 'anthropic',
         label: 'Anthropic',
-        depPatterns: [/anthropic/i, /@anthropic-ai\/sdk/i],
-        envPatterns: [/anthropic_api_key/i],
-        codePatterns: [/\banthropic\b/i, /\bclaude\b/i],
+        dependencyKeywords: ['anthropic', '@anthropic-ai/sdk'],
+        envKeywords: ['ANTHROPIC_API_KEY'],
+        sourceKeywords: ['anthropic', 'claude'],
       },
       {
         id: 'gemini',
         label: 'Gemini',
-        depPatterns: [/@google\/genai/i, /@google\/generative-ai/i, /google-generativeai/i],
-        envPatterns: [/google_api_key/i, /gemini/i],
-        codePatterns: [/\bgemini\b/i, /google\.generativeai/i],
+        dependencyKeywords: ['@google/genai', '@google/generative-ai', 'google-generativeai'],
+        envKeywords: ['GOOGLE_API_KEY', 'gemini'],
+        sourceKeywords: ['gemini', 'google.generativeai'],
       },
       {
         id: 'azure-openai',
         label: 'Azure OpenAI',
-        depPatterns: [/azure-openai/i],
-        envPatterns: [/azure_openai_api_key/i, /azure_openai_endpoint/i],
-        codePatterns: [/\bazureopenai\b/i, /azure[_-]?openai/i],
+        dependencyKeywords: ['azure-openai'],
+        envKeywords: ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'],
+        sourceKeywords: ['AzureOpenAI', 'azure-openai', 'azure_openai'],
       },
       {
         id: 'groq',
         label: 'Groq',
-        depPatterns: [/\bgroq\b/i],
-        envPatterns: [/groq_api_key/i],
-        codePatterns: [/\bgroq\b/i],
+        dependencyKeywords: ['groq'],
+        envKeywords: ['GROQ_API_KEY'],
+        sourceKeywords: ['groq'],
       },
       {
         id: 'grok',
         label: 'Grok / xAI',
-        depPatterns: [/\bxai_sdk\b/i, /@ai-sdk\/xai/i, /\bxai\b/i],
-        envPatterns: [/xai_api_key/i, /\bgrok\b/i],
-        codePatterns: [/\bgrok[-\w.]*\b/i, /\bxai\b/i, /api\.x\.ai/i],
+        dependencyKeywords: ['xai_sdk', '@ai-sdk/xai', 'xai'],
+        envKeywords: ['XAI_API_KEY', 'grok'],
+        sourceKeywords: ['grok', 'xai', 'api.x.ai'],
       },
       {
         id: 'local',
         label: 'Local Model Runner',
-        depPatterns: [/\bollama\b/i, /\bvllm\b/i, /llama\.cpp/i],
-        envPatterns: [/ollama/i, /lm[_-]?studio/i],
-        codePatterns: [/\bollama\b/i, /\bvllm\b/i, /lm\s*studio/i, /localhost:11434/i],
+        dependencyKeywords: ['ollama', 'vllm', 'llama.cpp'],
+        envKeywords: ['ollama', 'lm_studio', 'lm-studio'],
+        sourceKeywords: ['ollama', 'vllm', 'LM Studio', 'localhost:11434'],
       },
-    ];
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        dependencyKeywords: ['deepseek'],
+        envKeywords: ['DEEPSEEK_API_KEY'],
+        sourceKeywords: ['api.deepseek.com', 'deepseek-chat', 'deepseek-reasoner'],
+      },
+      {
+        id: 'mistral',
+        label: 'Mistral',
+        dependencyKeywords: ['mistralai', '@mistralai/mistralai'],
+        envKeywords: ['MISTRAL_API_KEY'],
+        sourceKeywords: ['mistral', 'api.mistral.ai'],
+      },
+      {
+        id: 'cohere',
+        label: 'Cohere',
+        dependencyKeywords: ['cohere-ai', 'cohere'],
+        envKeywords: ['COHERE_API_KEY'],
+        sourceKeywords: ['cohere', 'api.cohere'],
+      },
+      {
+        id: 'perplexity',
+        label: 'Perplexity',
+        dependencyKeywords: ['perplexity'],
+        envKeywords: ['PERPLEXITY_API_KEY'],
+        sourceKeywords: ['perplexity', 'api.perplexity.ai'],
+      },
+      {
+        id: 'together',
+        label: 'Together AI',
+        dependencyKeywords: ['together-ai', 'together'],
+        envKeywords: ['TOGETHER_API_KEY'],
+        sourceKeywords: ['together', 'api.together.xyz'],
+      },
+      {
+        id: 'fireworks',
+        label: 'Fireworks',
+        dependencyKeywords: ['fireworks-ai', 'fireworks'],
+        envKeywords: ['FIREWORKS_API_KEY'],
+        sourceKeywords: ['fireworks', 'api.fireworks.ai'],
+      },
+      {
+        id: 'openrouter',
+        label: 'OpenRouter',
+        dependencyKeywords: ['openrouter'],
+        envKeywords: ['OPENROUTER_API_KEY'],
+        sourceKeywords: ['openrouter', 'openrouter.ai/api'],
+      },
+    ].map((provider) => {
+      const override = providerOverrides?.[provider.id] || {};
+      const dependencyKeywords = (override?.dependencyKeywords || provider.dependencyKeywords || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      const envKeywords = (override?.envKeywords || provider.envKeywords || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      const sourceKeywords = (override?.sourceKeywords || provider.sourceKeywords || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      const normalized = {
+        ...provider,
+        label: String(override?.label || provider.label || '').trim() || provider.label,
+        docsUrl: String(override?.docsUrl || provider.docsUrl || '').trim(),
+        dependencyKeywords,
+        envKeywords,
+        sourceKeywords,
+      };
+      return {
+        ...normalized,
+        depPatterns: keywordPatterns(dependencyKeywords),
+        envPatterns: keywordPatterns(envKeywords),
+        codePatterns: keywordPatterns(sourceKeywords),
+        heuristicsSummary: summarizeHeuristics(normalized),
+        isCustom: false,
+      };
+    });
+
+    const customProviderDefs = (llmSettings.customProviderHeuristics || [])
+      .map((provider, index) => {
+        const label = String(provider?.label || provider?.name || '').trim();
+        const id = String(provider?.id || '').trim() || `custom-${slugifyProviderId(label || `provider-${index + 1}`)}`;
+        const dependencyKeywords = (provider?.dependencyKeywords || []).map((value) => String(value || '').trim()).filter(Boolean);
+        const envKeywords = (provider?.envKeywords || []).map((value) => String(value || '').trim()).filter(Boolean);
+        const sourceKeywords = (provider?.sourceKeywords || []).map((value) => String(value || '').trim()).filter(Boolean);
+        if (!label || (!dependencyKeywords.length && !envKeywords.length && !sourceKeywords.length)) return null;
+        const normalized = {
+          id,
+          label,
+          docsUrl: String(provider?.docsUrl || '').trim(),
+          dependencyKeywords,
+          envKeywords,
+          sourceKeywords,
+          isCustom: true,
+        };
+        return {
+          ...normalized,
+          depPatterns: keywordPatterns(dependencyKeywords),
+          envPatterns: keywordPatterns(envKeywords),
+          codePatterns: keywordPatterns(sourceKeywords),
+          heuristicsSummary: summarizeHeuristics(normalized),
+        };
+      })
+      .filter(Boolean);
+
+    const providerDefs = [...builtinProviderDefs, ...customProviderDefs];
 
     const providers = providerDefs
       .map((provider) => {
-        const sources = [];
-        if (provider.depPatterns.some((pattern) => pattern.test(dependencyText))) sources.push('dependency');
-        if (provider.envPatterns.some((pattern) => pattern.test(envText))) sources.push('env');
-        if (provider.codePatterns.some((pattern) => pattern.test(lowerSourceText))) sources.push('source');
-        return { ...provider, detected: sources.length > 0, sources };
+        const dependencyEvidence = collectSignalEvidence(dependencyEntries, provider.depPatterns);
+        const envEvidence = collectSignalEvidence(envEntries, provider.envPatterns);
+        const sourceEvidence = collectSignalEvidence(sourceEntries, provider.codePatterns);
+        const signals = {
+          dependency: dependencyEvidence,
+          env: envEvidence,
+          source: sourceEvidence,
+        };
+        const sources = Object.entries(signals)
+          .filter(([, evidence]) => evidence.length > 0)
+          .map(([signalId]) => signalId);
+        return {
+          id: provider.id,
+          label: provider.label,
+          detected: sources.length > 0,
+          sources,
+          signals,
+          heuristicsSummary: provider.heuristicsSummary,
+          dependencyKeywords: provider.dependencyKeywords,
+          envKeywords: provider.envKeywords,
+          sourceKeywords: provider.sourceKeywords,
+          isCustom: provider.isCustom,
+          docsUrl: provider.docsUrl || '',
+        };
       })
-      .filter((provider) => provider.detected)
-      .map(({ id, label, sources }) => ({ id, label, sources }));
+      .sort((a, b) => a.label.localeCompare(b.label));
 
     const promptFiles = files.filter((entry) => {
       const matchesPath = promptFilePattern.test(entry.rel);
       const promptExt = ['.md', '.txt', '.json', '.yaml', '.yml', '.prompt', '.jinja', '.j2'].includes(entry.ext);
       return matchesPath && promptExt;
     });
-    const dedicatedPromptDirs = [...new Set([
-      ...directories
-        .filter((entry) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(entry.name))
-        .map((entry) => entry.rel),
-      ...promptFiles
-        .map((entry) => entry.rel.split('/'))
-        .filter((segments) => segments.length > 1)
-        .map((segments) => segments.find((segment) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(segment)))
-        .filter(Boolean),
-    ])];
+    const dedicatedPromptDirMap = new Map();
+    directories
+      .filter((entry) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(entry.name))
+      .forEach((entry) => {
+        dedicatedPromptDirMap.set(entry.rel, entry);
+      });
+    promptFiles.forEach((entry) => {
+      const segments = entry.rel.split('/');
+      if (segments.length < 2) return;
+      const matchIndex = segments.findIndex((segment) => /^prompts?$|system-prompts|prompt-templates|templates$/i.test(segment));
+      if (matchIndex === -1) return;
+      const dirRel = segments.slice(0, matchIndex + 1).join('/');
+      if (!dedicatedPromptDirMap.has(dirRel)) {
+        dedicatedPromptDirMap.set(dirRel, {
+          path: path.join(workspaceRoot, ...dirRel.split('/')),
+          rel: dirRel,
+          name: segments[matchIndex],
+        });
+      }
+    });
+    const dedicatedPromptDirEntries = [...dedicatedPromptDirMap.values()];
+    const dedicatedPromptDirs = dedicatedPromptDirEntries.map((entry) => entry.rel);
     const promptTextEntries = textEntries.filter((entry) => promptFiles.some((candidate) => candidate.rel === entry.rel));
     const systemPromptFiles = promptFiles.filter((entry) => /(system|instructions?)/i.test(entry.rel));
     const versionedPromptFiles = promptFiles.filter((entry) => /\bv\d+\b|version/i.test(entry.rel));
@@ -4301,10 +4512,15 @@ ipcMain.handle('python:llm-ops-status', async () => {
     const promptAssets = {
       total: promptFiles.length,
       files: promptFiles.slice(0, 12).map((entry) => entry.rel),
+      fileDetails: promptFiles.slice(0, 12).map((entry) => ({ file: entry.rel, absolutePath: entry.path, type: 'file' })),
       dedicatedDirs: dedicatedPromptDirs,
+      dedicatedDirDetails: dedicatedPromptDirEntries.slice(0, 8).map((entry) => ({ file: entry.rel, absolutePath: entry.path, type: 'directory' })),
       systemPromptFiles: systemPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      systemPromptFileDetails: systemPromptFiles.slice(0, 8).map((entry) => ({ file: entry.rel, absolutePath: entry.path, type: 'file' })),
       versionedFiles: versionedPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      versionedFileDetails: versionedPromptFiles.slice(0, 8).map((entry) => ({ file: entry.rel, absolutePath: entry.path, type: 'file' })),
       templatedFiles: templatedPromptFiles.slice(0, 8).map((entry) => entry.rel),
+      templatedFileDetails: templatedPromptFiles.slice(0, 8).map((entry) => ({ file: entry.rel, absolutePath: entry.path, type: 'file' })),
       hasDedicatedPromptDir: dedicatedPromptDirs.length > 0,
       separatedFromAppCode: dedicatedPromptDirs.length > 0,
     };
@@ -4619,6 +4835,31 @@ ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) =>
     }
 
     const baseUrlNoSlash = baseUrl.replace(/\/+$/, '');
+    const inferProviderCapabilities = (id) => {
+      if (['openai', 'azure-openai', 'anthropic', 'gemini', 'groq', 'grok'].includes(id)) {
+        return {
+          structuredOutputs: true,
+          tools: true,
+          promptCaching: ['openai', 'anthropic', 'gemini'].includes(id),
+          evalRunner: true,
+        };
+      }
+      if (['custom', 'local'].includes(id)) {
+        return {
+          structuredOutputs: false,
+          tools: false,
+          promptCaching: false,
+          evalRunner: true,
+        };
+      }
+      return {
+        structuredOutputs: false,
+        tools: false,
+        promptCaching: false,
+        evalRunner: true,
+      };
+    };
+    const capabilities = inferProviderCapabilities(providerId);
 
     if (['openai', 'groq', 'grok', 'custom', 'local'].includes(providerId)) {
       const headers = {};
@@ -4655,6 +4896,7 @@ ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) =>
         providerId,
         validatedModel: resolvedModelId,
         connectionStatus: 'connected',
+        capabilities,
         checkedAt: Date.now(),
         message: `Connected successfully and resolved model ${resolvedModelId}.`,
       };
@@ -4684,6 +4926,7 @@ ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) =>
         providerId,
         validatedModel: response?.data?.model || modelId,
         connectionStatus: 'connected',
+        capabilities,
         checkedAt: Date.now(),
         message: `Connected successfully to Anthropic using model ${response?.data?.model || modelId}.`,
       };
@@ -4714,6 +4957,7 @@ ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) =>
         providerId,
         validatedModel: response?.data?.modelVersion || modelId,
         connectionStatus: 'connected',
+        capabilities,
         checkedAt: Date.now(),
         message: `Connected successfully to Gemini using model ${response?.data?.modelVersion || modelId}.`,
       };
@@ -4739,6 +4983,7 @@ ipcMain.handle('python:llm-ops-test-connection', async (_event, payload = {}) =>
         providerId,
         validatedModel: matched?.id || modelId,
         connectionStatus: 'connected',
+        capabilities,
         checkedAt: Date.now(),
         message: matched
           ? `Connected successfully and found Azure model ${matched.id || modelId}.`

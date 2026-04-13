@@ -555,6 +555,8 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
   );
   const {
     settings,
+    loading,
+    save,
     storageInfo,
     refreshStorageInfo,
     exportSettings,
@@ -562,6 +564,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
     resetSettings,
   } = useSettings();
   const company = settings?.company || {};
+  const uiSettings = settings?.ui || {};
   const primary = company.namePrimary || company.name || 'App';
   const accent = company.nameAccent || '';
 
@@ -578,6 +581,7 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
   const [workspaceInfo, setWorkspaceInfo] = useState(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState(null);
+  const [uiStateReady, setUiStateReady] = useState(false);
   // Track visited pages so we keep them mounted (hidden) once first visited
   const [visitedPages, setVisitedPages] = useState(
     () => new Set([defaultActiveId || flatNavItems[0]?.id].filter(Boolean))
@@ -589,21 +593,51 @@ export default function AppShell({ groups, standaloneItems = [], defaultActiveId
     window.electronAPI?.setLastPage?.(id);
   };
 
-  // Restore last page on first mount
+  // Restore the last visible page from persisted UI state, with the legacy
+  // nav-state file kept as a fallback for older installs.
   useEffect(() => {
-    window.electronAPI?.getLastPage?.().then(lastId => {
-      if (lastId && flatNavItems.some(item => item.id === lastId)) {
+    if (loading || uiStateReady) return;
+    setCollapsed(Boolean(uiSettings?.compactSidebar));
+    const savedId = uiSettings?.lastActivePageId;
+    if (savedId && flatNavItems.some((item) => item.id === savedId)) {
+      setActiveId(savedId);
+      setVisitedPages((prev) => { const s = new Set(prev); s.add(savedId); return s; });
+      setUiStateReady(true);
+      return;
+    }
+    window.electronAPI?.getLastPage?.().then((lastId) => {
+      if (lastId && flatNavItems.some((item) => item.id === lastId)) {
         setActiveId(lastId);
-        setVisitedPages(prev => { const s = new Set(prev); s.add(lastId); return s; });
+        setVisitedPages((prev) => { const s = new Set(prev); s.add(lastId); return s; });
       }
-    }).catch(() => {});
-  }, []);
+    }).catch(() => {}).finally(() => setUiStateReady(true));
+  }, [flatNavItems, loading, uiSettings?.compactSidebar, uiSettings?.lastActivePageId, uiStateReady]);
 
   useEffect(() => {
     if (!flatNavItems.some((item) => item.id === activeId)) {
       setActiveId(defaultActiveId || flatNavItems[0]?.id);
     }
   }, [activeId, defaultActiveId, flatNavItems]);
+
+  useEffect(() => {
+    if (loading || !uiStateReady || !activeId || uiSettings?.lastActivePageId === activeId) return;
+    void save({
+      ui: {
+        ...uiSettings,
+        lastActivePageId: activeId,
+      },
+    });
+  }, [activeId, loading, save, uiSettings, uiStateReady]);
+
+  useEffect(() => {
+    if (loading || !uiStateReady || Boolean(uiSettings?.compactSidebar) === collapsed) return;
+    void save({
+      ui: {
+        ...uiSettings,
+        compactSidebar: collapsed,
+      },
+    });
+  }, [collapsed, loading, save, uiSettings, uiStateReady]);
 
   useEffect(() => {
     let isMounted = true;
