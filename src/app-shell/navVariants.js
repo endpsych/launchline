@@ -40,7 +40,7 @@ export const LAUNCHLINE_APP_CONFIG = {
     { id: 'python-tools',  label: 'Python',     icon: PythonIcon, page: PythonTools,   subtitle: 'uv-first Python capability center' },
     { id: 'secrets',       label: 'Secrets',    icon: Shield,     page: SecretsPage,   subtitle: 'Secrets hygiene and environment file checks' },
     { id: 'cicd',          label: 'CI/CD',      icon: GitBranch,  page: CICDPage,      subtitle: 'Pipelines, workflows, and delivery checks' },
-    { id: 'llm-operations', label: 'LLM Operations', icon: Sparkles, page: LLMOperationsPage, subtitle: 'Providers, prompts, evals, and model operations posture' },
+    { id: 'llm-operations', label: 'LLMOPS', icon: Sparkles, page: LLMOperationsPage, subtitle: 'Providers, prompts, evals, and model operations posture' },
     { id: 'access-control', label: 'Access Control', icon: Lock,  page: AccessControlPage, subtitle: 'Authentication, authorization, and RBAC review' },
     { id: 'audit-logging', label: 'Audit Logging', icon: FileText, page: AuditLoggingPage, subtitle: 'Traceability, audit trails, and retention posture' },
     { id: 'disaster-recovery', label: 'Disaster Recovery', icon: LifeBuoy, page: DisasterRecoveryPage, subtitle: 'Backups, runbooks, failover, and recovery posture' },

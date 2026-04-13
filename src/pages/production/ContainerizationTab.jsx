@@ -148,7 +148,7 @@ function DockerfileSection({ dockerfiles, dockerIgnore }) {
 
 // ─── Compose section ──────────────────────────────────────────────────────────
 
-function ComposeSection({ compose }) {
+function ComposeSection({ compose, envCoverage = null }) {
   if (!compose) {
     return (
       <Collapsible title="Docker Compose" icon={Server} defaultOpen={false}>
@@ -202,6 +202,45 @@ function ComposeSection({ compose }) {
       {issueCount === 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#4ade80' }}>
           <CheckCircle2 size={12} /> No Compose issues detected
+        </div>
+      )}
+
+      {/* Env var coverage */}
+      {envCoverage !== null && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.r}0.12)` }}>
+          <div style={T.subhead}>Env var coverage</div>
+          {envCoverage.missingKeys.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#4ade80' }}>
+                <CheckCircle2 size={12} style={{ flexShrink: 0 }} />
+                All {envCoverage.referencedKeys.length} referenced key{envCoverage.referencedKeys.length !== 1 ? 's' : ''} present in .env
+              </div>
+              {envCoverage.referencedKeys.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                  {envCoverage.referencedKeys.map(k => (
+                    <span key={k} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'rgba(74,222,128,0.6)', background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.15)', borderRadius: 4, padding: '1px 6px' }}>{k}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#fdba74' }}>
+                <AlertTriangle size={12} style={{ flexShrink: 0 }} />
+                {envCoverage.missingKeys.length} key{envCoverage.missingKeys.length !== 1 ? 's' : ''} referenced in {envCoverage.file} missing from .env
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                {envCoverage.missingKeys.map(k => (
+                  <span key={k} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: '#fdba74', background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.25)', borderRadius: 4, padding: '1px 6px' }}>{k}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {envCoverage.envFileRefs.length > 0 && (
+            <div style={{ fontSize: 10, color: 'rgba(148,163,184,0.4)', marginTop: 4 }}>
+              env_file: {envCoverage.envFileRefs.join(', ')}
+            </div>
+          )}
         </div>
       )}
     </Collapsible>
@@ -266,9 +305,10 @@ function K8sSection({ k8s }) {
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
 export default function ContainerizationTab() {
-  const [status, setStatus]   = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
+  const [status, setStatus]       = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+  const [envCoverage, setEnvCoverage] = useState(null);
   const loadedRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -283,6 +323,13 @@ export default function ContainerizationTab() {
   }, []);
 
   useEffect(() => { if (!loadedRef.current) { loadedRef.current = true; load(); } }, [load]);
+
+  useEffect(() => {
+    if (!window.electronAPI?.pythonSecretsStatus) return;
+    window.electronAPI.pythonSecretsStatus({ expectedVars: [] })
+      .then(res => { if (res?.ok && res.dockerCompose) setEnvCoverage(res.dockerCompose); })
+      .catch(() => {});
+  }, []);
 
   if (loading && !status) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: 28, color: 'rgba(148,163,184,0.5)', fontSize: 12 }}>
@@ -334,7 +381,7 @@ export default function ContainerizationTab() {
     <Section title={sectionTitle}>
       <ScoreCard passed={passed} total={total} checks={status.score.checks} />
       <DockerfileSection dockerfiles={status.dockerfiles} dockerIgnore={status.dockerIgnore} />
-      <ComposeSection compose={status.compose} />
+      <ComposeSection compose={status.compose} envCoverage={envCoverage} />
       <K8sSection k8s={status.k8s} />
     </Section>
   );

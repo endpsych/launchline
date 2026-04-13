@@ -99,6 +99,35 @@ function providerFromSettings(settings, providerId) {
     || null;
 }
 
+function providerLabelForId(providerId) {
+  return providerOptions.find((option) => option.id === providerId)?.label || providerId || 'Unknown provider';
+}
+
+function bindingTypeFromFeatureId(featureId) {
+  switch (featureId) {
+    case 'summarization':
+    case 'recommendation':
+      return 'generation';
+    case 'classification':
+      return 'classification';
+    case 'search':
+      return 'retrieval';
+    case 'agents':
+      return 'agent';
+    case 'evals':
+      return 'evaluation';
+    default:
+      return 'manual';
+  }
+}
+
+function normalizeBindingKey(entry) {
+  const detectorId = String(entry?.detectorId || entry?.id || '').trim().toLowerCase();
+  const sourceFile = String(entry?.sourceFile || entry?.file || '').trim().toLowerCase();
+  const featureName = String(entry?.featureName || entry?.label || '').trim().toLowerCase();
+  return [detectorId, sourceFile, featureName].filter(Boolean).join('::');
+}
+
 function runtimeFromSettings(settings) {
   return settings?.llmOperations?.runtime || SETTINGS_DEFAULT.llmOperations.runtime;
 }
@@ -117,6 +146,11 @@ function formatDuration(value) {
 function formatNumber(value) {
   if (typeof value !== 'number') return '—';
   return value.toLocaleString();
+}
+
+function formatPercent(value) {
+  if (typeof value !== 'number') return '—';
+  return `${Math.round(value * 100)}%`;
 }
 
 function estimateRunCost({ usage, catalogEntry }) {
@@ -154,6 +188,17 @@ function responsePreview(value) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return 'No response text was returned.';
   return normalized.length > 112 ? `${normalized.slice(0, 112).trimEnd()}…` : normalized;
+}
+
+function categorizeFailure(error) {
+  const message = String(error || '').toLowerCase();
+  if (!message) return '';
+  if (message.includes('timed out') || message.includes('timeout')) return 'timeout';
+  if (message.includes('rate limit') || message.includes('429')) return 'rate_limit';
+  if (message.includes('api key') || message.includes('401') || message.includes('403') || message.includes('unauthorized')) return 'auth';
+  if (message.includes('schema') || message.includes('json')) return 'schema';
+  if (message.includes('network') || message.includes('fetch') || message.includes('socket') || message.includes('econn')) return 'network';
+  return 'provider_error';
 }
 
 function normalizeComparableText(value) {
@@ -195,12 +240,14 @@ function computeEvalSummary(cases) {
   const passCount = cases.filter((entry) => entry.status === 'pass').length;
   const failCount = cases.filter((entry) => entry.status === 'fail').length;
   const reviewCount = cases.filter((entry) => entry.status === 'review').length;
+  const escalatedCount = cases.filter((entry) => entry.escalated).length;
   const latencyValues = cases.map((entry) => entry.latencyMs).filter((value) => typeof value === 'number');
   return {
     totalCases: cases.length,
     passCount,
     failCount,
     reviewCount,
+    escalatedCount,
     totalTokens: cases.reduce((sum, entry) => sum + (entry?.usage?.total_tokens || 0), 0),
     estimatedCost: cases.reduce((sum, entry) => sum + (typeof entry?.estimatedCost === 'number' ? entry.estimatedCost : 0), 0),
     averageLatencyMs: latencyValues.length ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length : null,
@@ -377,6 +424,7 @@ function EvalRunnerModal({
   evalAssetFiles,
   providerLabel,
   providerConfig,
+  runtime,
   evalRunHistory,
   evalMode,
   onEvalModeChange,
@@ -385,6 +433,8 @@ function EvalRunnerModal({
   onPickJudgeModel,
   canPickCatalogModel,
   onReviewCase,
+  onCaseNoteChange,
+  onToggleCaseEscalation,
   onSaveRun,
   onLoadEvalAsset,
   loading,
@@ -403,6 +453,10 @@ function EvalRunnerModal({
   const previousPassRate = averagePassRate(previousRuns);
   const trendDelta = recentPassRate != null && previousPassRate != null ? recentPassRate - previousPassRate : null;
   const trendTone = trendDelta == null ? 'default' : trendDelta > 0.01 ? 'good' : trendDelta < -0.01 ? 'danger' : 'warn';
+  const gateThreshold = Number(runtime?.evalGateMinPassRate) || 0;
+  const gateEnforced = !!runtime?.requireEvalGatePass;
+  const gatePassRate = result?.totalCases ? (result.passCount / result.totalCases) : null;
+  const gatePassed = gatePassRate == null ? null : gatePassRate >= gateThreshold;
 
   return (
     <Modal
@@ -442,6 +496,16 @@ function EvalRunnerModal({
                 {trendDelta == null ? 'baseline only' : trendDelta > 0.01 ? `up ${Math.round(trendDelta * 100)} pts` : trendDelta < -0.01 ? `down ${Math.abs(Math.round(trendDelta * 100))} pts` : 'flat'}
               </SmallPill>
               <SmallPill>{`${evalRunHistory.length} saved runs`}</SmallPill>
+            </div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Eval Gate</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{formatPercent(gateThreshold)}</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <SmallPill tone={gateEnforced ? 'warn' : 'default'}>{gateEnforced ? 'enforced' : 'advisory'}</SmallPill>
+                {gatePassed != null && <SmallPill tone={gatePassed ? 'good' : 'danger'}>{gatePassed ? 'gate passed' : 'gate blocked'}</SmallPill>}
+              </div>
             </div>
           </div>
         </div>
@@ -597,9 +661,14 @@ function EvalRunnerModal({
             {loading ? 'Loading dataset…' : running ? 'Running eval set…' : 'Run Eval Set'}
           </button>
           {result && (
-            <button type="button" onClick={onSaveRun} style={actionButtonStyle} disabled={result.saved}>
+            <button
+              type="button"
+              onClick={onSaveRun}
+              style={actionButtonStyle}
+              disabled={result.saved || (gateEnforced && gatePassed === false)}
+            >
               <Sparkles size={13} />
-              {result.saved ? 'Saved to history' : 'Save Eval Run'}
+              {result.saved ? 'Saved to history' : gateEnforced && gatePassed === false ? 'Gate blocked' : 'Save Eval Run'}
             </button>
           )}
         </div>
@@ -617,6 +686,10 @@ function EvalRunnerModal({
                   <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{result.passCount}/{result.failCount}/{result.reviewCount}</div>
                 </div>
                 <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Escalations</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{result.escalatedCount || 0}</div>
+                </div>
+                <div>
                   <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Eval Mode</div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{result.modeLabel}</div>
                 </div>
@@ -627,6 +700,10 @@ function EvalRunnerModal({
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Avg Latency</div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{formatDuration(result.averageLatencyMs)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Gate Status</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: gatePassed ? '#4ade80' : '#f87171' }}>{gatePassed == null ? '—' : gatePassed ? 'Pass' : 'Blocked'}</div>
                 </div>
               </div>
             </div>
@@ -639,6 +716,7 @@ function EvalRunnerModal({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1 }}>{entry.title}</div>
                       <SmallPill tone={entry.status === 'pass' ? 'good' : entry.status === 'fail' ? 'danger' : 'warn'}>{entry.status}</SmallPill>
+                      {entry.escalated && <SmallPill tone="danger">escalated</SmallPill>}
                       {typeof entry.estimatedCost === 'number' && <SmallPill>{`cost ${formatMoney(entry.estimatedCost)}`}</SmallPill>}
                       {typeof entry.latencyMs === 'number' && <SmallPill>{`latency ${formatDuration(entry.latencyMs)}`}</SmallPill>}
                     </div>
@@ -666,10 +744,21 @@ function EvalRunnerModal({
                       Result: {responsePreview(entry.outputText || entry.error)}
                     </div>
                     {(result.mode === 'human_review' || result.mode === 'rubric_based') && (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button type="button" onClick={() => onReviewCase(entry.id, 'pass')} style={positiveButtonStyle}>Mark Pass</button>
                         <button type="button" onClick={() => onReviewCase(entry.id, 'fail')} style={secondaryButtonStyle}>Mark Fail</button>
                         <button type="button" onClick={() => onReviewCase(entry.id, 'review')} style={secondaryButtonStyle}>Keep Review</button>
+                        <button type="button" onClick={() => onToggleCaseEscalation(entry.id)} style={entry.escalated ? positiveButtonStyle : secondaryButtonStyle}>
+                          {entry.escalated ? 'Escalated' : 'Escalate'}
+                        </button>
+                        </div>
+                        <textarea
+                          value={entry.reviewNote || ''}
+                          onChange={(event) => onCaseNoteChange(entry.id, event.target.value)}
+                          placeholder="Add operator review notes or escalation context"
+                          style={{ ...inputStyle, minHeight: 72, resize: 'vertical', lineHeight: 1.5 }}
+                        />
                       </div>
                     )}
                   </div>
@@ -804,6 +893,7 @@ function PromptTesterModal({
   providerConfig,
   runtime,
   sessionSummary,
+  sessionBudgetUsd,
   promptDraft,
   onPromptDraftChange,
   comparisonModelId,
@@ -815,6 +905,8 @@ function PromptTesterModal({
   onPickComparisonModel,
   savedPromptTitle,
   onSavedPromptTitleChange,
+  savedPromptVersion,
+  onSavedPromptVersionChange,
   savedPrompts,
   onSavePrompt,
   onLoadSavedPrompt,
@@ -834,6 +926,9 @@ function PromptTesterModal({
   result,
 }) {
   const usage = result?.usage || null;
+  const overBudget = typeof sessionBudgetUsd === 'number'
+    && typeof sessionSummary.estimatedCost === 'number'
+    && sessionSummary.estimatedCost > sessionBudgetUsd;
   return (
     <Modal onClose={onClose} title="Prompt Tester" subtitle="Send a direct test prompt using the currently selected provider, model, and runtime settings." icon={<TestTube2 size={18} color={T.color} />} accentColor={T.color} maxWidth={960}>
       <div style={{ display: 'grid', gap: 14 }}>
@@ -856,6 +951,13 @@ function PromptTesterModal({
               <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{sessionSummary.runCount} runs this session</div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {formatNumber(sessionSummary.totalTokens)} tokens · {formatMoney(sessionSummary.estimatedCost)} · avg latency {formatDuration(sessionSummary.averageLatencyMs)}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <SmallPill tone={overBudget ? 'danger' : 'good'}>{`budget ${formatMoney(sessionBudgetUsd)}`}</SmallPill>
+                {overBudget && <SmallPill tone="danger">over budget</SmallPill>}
+                {Object.entries(sessionSummary.failureCategories || {}).slice(0, 2).map(([category, count]) => (
+                  <SmallPill key={category} tone="danger">{`${category} ${count}`}</SmallPill>
+                ))}
               </div>
             </div>
           </div>
@@ -945,6 +1047,7 @@ function PromptTesterModal({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                     <SmallPill tone={result.ok ? 'good' : 'danger'}>{result.ok ? 'success' : 'failed'}</SmallPill>
                     {result.rawId && <SmallPill>{result.rawId}</SmallPill>}
+                    {!result.ok && result.failureCategory && <SmallPill tone="danger">{result.failureCategory}</SmallPill>}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                     {result.ok ? 'Prompt test completed using the currently selected provider configuration.' : (result.error || 'Prompt test failed.')}
@@ -998,13 +1101,22 @@ function PromptTesterModal({
             <div style={cardStyle}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 10 }}>Reusable Test Prompts</div>
               <div style={{ display: 'grid', gap: 10 }}>
-                <input
-                  type="text"
-                  value={savedPromptTitle}
-                  onChange={(event) => onSavedPromptTitleChange(event.target.value)}
-                  placeholder="Prompt name"
-                  style={inputStyle}
-                />
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 8 }}>
+                  <input
+                    type="text"
+                    value={savedPromptTitle}
+                    onChange={(event) => onSavedPromptTitleChange(event.target.value)}
+                    placeholder="Prompt name"
+                    style={inputStyle}
+                  />
+                  <input
+                    type="text"
+                    value={savedPromptVersion}
+                    onChange={(event) => onSavedPromptVersionChange(event.target.value)}
+                    placeholder="v1"
+                    style={inputStyle}
+                  />
+                </div>
                 <button type="button" onClick={onSavePrompt} style={actionButtonStyle} disabled={!promptDraft.trim()}>
                   <Sparkles size={13} />
                   Save reusable prompt
@@ -1017,8 +1129,15 @@ function PromptTesterModal({
                   <div style={{ display: 'grid', gap: 8 }}>
                     {savedPrompts.map((entry) => (
                       <div key={entry.id} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: '10px 12px', background: 'rgba(255,255,255,0.02)', display: 'grid', gap: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{entry.title}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1 }}>{entry.title}</div>
+                          {entry.version && <SmallPill>{entry.version}</SmallPill>}
+                          {entry.providerLabel && <SmallPill tone="good">{entry.providerLabel}</SmallPill>}
+                        </div>
                         <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{promptPreview(entry.prompt)}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          {entry.modelId || 'no model'} · updated {new Date(entry.updatedAt || entry.createdAt || Date.now()).toLocaleString()}
+                        </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button type="button" onClick={() => onLoadSavedPrompt(entry)} style={secondaryButtonStyle}>Use</button>
                           <button type="button" onClick={() => onDeleteSavedPrompt(entry.id)} style={secondaryButtonStyle}>Delete</button>
@@ -1068,6 +1187,7 @@ function PromptTesterModal({
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1 }}>{entry.title}</div>
                         <SmallPill tone={entry.ok ? 'good' : 'danger'}>{entry.ok ? 'success' : 'failed'}</SmallPill>
+                        {entry.failureCategory && <SmallPill tone="danger">{entry.failureCategory}</SmallPill>}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                         {entry.providerLabel} · {entry.modelId || 'no model'} · {new Date(entry.ranAt).toLocaleString()}
@@ -1095,10 +1215,12 @@ export default function LLMProviderControls({
   onConnectionError,
   promptAssetFiles = [],
   evalAssetFiles = [],
+  detectedFeatureBindings = [],
   promptAssetRequest = null,
   onPromptAssetRequestHandled,
   evalRunRequest = null,
   onEvalRunRequestHandled,
+  activeSection = 'overview',
 }) {
   const { settings, loading, save } = useSettings();
   const [sessionApiKeys, setSessionApiKeys] = useState(() => readSessionKeys());
@@ -1112,6 +1234,14 @@ export default function LLMProviderControls({
   const [comparisonPromptDraft, setComparisonPromptDraft] = useState('');
   const [useSamePromptForComparison, setUseSamePromptForComparison] = useState(true);
   const [savedPromptTitle, setSavedPromptTitle] = useState('Structured outputs explainer');
+  const [savedPromptVersion, setSavedPromptVersion] = useState('v1');
+  const [featureDraft, setFeatureDraft] = useState({
+    featureName: '',
+    bindingType: 'manual',
+    providerId: 'openai',
+    modelId: '',
+    notes: '',
+  });
   const [promptTestRunning, setPromptTestRunning] = useState(false);
   const [comparisonRunning, setComparisonRunning] = useState(false);
   const [promptTestResult, setPromptTestResult] = useState(null);
@@ -1131,20 +1261,48 @@ export default function LLMProviderControls({
   const savedPrompts = currentSettings.llmOperations?.savedPrompts || [];
   const promptTestHistory = currentSettings.llmOperations?.promptTestHistory || [];
   const evalRunHistory = currentSettings.llmOperations?.evalRunHistory || [];
+  const featureBindings = currentSettings.llmOperations?.featureBindings || [];
   const runtime = runtimeFromSettings(currentSettings);
   const providerMeta = providerOptions.find((option) => option.id === selectedProviderId) || providerOptions[0];
   const sessionKey = sessionApiKeys[selectedProviderId] || '';
   const providerCatalog = getProviderModelCatalog(selectedProviderId);
   const modelCatalogEntry = getProviderModelCatalogEntry(selectedProviderId, providerConfig?.modelId);
   const lastValidation = providerConfig?.lastValidation || null;
+  const showOverview = activeSection === 'overview';
+  const showProvider = activeSection === 'provider';
+  const showWorkflows = activeSection === 'workflows';
+  const showRuntime = activeSection === 'runtime';
+  const showBindings = activeSection === 'bindings';
+  const importedFeatureBindingKeys = useMemo(
+    () => new Set(featureBindings.map((entry) => normalizeBindingKey(entry)).filter(Boolean)),
+    [featureBindings],
+  );
+  const featureBindingSuggestions = useMemo(
+    () => detectedFeatureBindings
+      .map((entry) => ({
+        detectorId: entry.id,
+        label: entry.label,
+        sourceFile: entry.file,
+        bindingType: bindingTypeFromFeatureId(entry.id),
+      }))
+      .filter((entry) => !importedFeatureBindingKeys.has(normalizeBindingKey(entry))),
+    [detectedFeatureBindings, importedFeatureBindingKeys],
+  );
   const sessionSummary = useMemo(() => {
     const successfulRuns = sessionPromptRuns.filter((entry) => entry?.ok);
     const latencyValues = successfulRuns.map((entry) => entry.latencyMs).filter((value) => typeof value === 'number');
+    const failureCategories = sessionPromptRuns
+      .filter((entry) => !entry?.ok && entry?.failureCategory)
+      .reduce((accumulator, entry) => {
+        accumulator[entry.failureCategory] = (accumulator[entry.failureCategory] || 0) + 1;
+        return accumulator;
+      }, {});
     return {
       runCount: sessionPromptRuns.length,
       totalTokens: successfulRuns.reduce((sum, entry) => sum + (entry?.usage?.total_tokens || 0), 0),
       estimatedCost: successfulRuns.reduce((sum, entry) => sum + (typeof entry?.estimatedCost === 'number' ? entry.estimatedCost : 0), 0),
       averageLatencyMs: latencyValues.length ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length : null,
+      failureCategories,
     };
   }, [sessionPromptRuns]);
 
@@ -1159,6 +1317,22 @@ export default function LLMProviderControls({
   useEffect(() => {
     setJudgeModelId((currentValue) => currentValue || providerConfig?.modelId || '');
   }, [providerConfig?.modelId]);
+
+  useEffect(() => {
+    setFeatureDraft((current) => {
+      if (current.providerId === selectedProviderId && current.modelId === (providerConfig?.modelId || '')) {
+        return current;
+      }
+      if (current.featureName || current.notes) {
+        return current;
+      }
+      return {
+        ...current,
+        providerId: selectedProviderId,
+        modelId: providerConfig?.modelId || '',
+      };
+    });
+  }, [providerConfig?.modelId, selectedProviderId]);
 
   const saveLlmSettings = useCallback(async (partial) => {
     await save({ llmOperations: partial });
@@ -1200,6 +1374,7 @@ export default function LLMProviderControls({
         message: result?.ok ? (result.message || 'Connection succeeded.') : (result?.error || 'Connection failed.'),
         checkedAt: Date.now(),
         validatedModel: result?.validatedModel || providerConfig?.modelId,
+        capabilities: result?.capabilities || null,
       };
       await saveLlmSettings({ providers: { [selectedProviderId]: { lastValidation: nextValidation } } });
       if (!result?.ok) onConnectionError?.(result?.error || 'Connection failed.');
@@ -1209,6 +1384,7 @@ export default function LLMProviderControls({
         message: err.message || 'Connection failed.',
         checkedAt: Date.now(),
         validatedModel: providerConfig?.modelId,
+        capabilities: null,
       };
       await saveLlmSettings({ providers: { [selectedProviderId]: { lastValidation: nextValidation } } });
       onConnectionError?.(err.message || 'Connection failed.');
@@ -1262,6 +1438,7 @@ export default function LLMProviderControls({
     baseUrl: providerConfig?.baseUrl || '',
     ok: !!result?.ok,
     error: result?.ok ? '' : (result?.error || 'Prompt test failed.'),
+    failureCategory: result?.ok ? '' : categorizeFailure(result?.error),
     outputText: result?.outputText || '',
     outputPreview: result?.outputText || '',
     usage: result?.usage || null,
@@ -1338,34 +1515,67 @@ export default function LLMProviderControls({
     const trimmedPrompt = promptDraft.trim();
     if (!trimmedPrompt) return;
     const title = (savedPromptTitle || '').trim() || derivePromptTitle(trimmedPrompt);
+    const version = (savedPromptVersion || '').trim() || 'v1';
     const now = Date.now();
     const existing = savedPrompts.find((entry) => entry.title.trim().toLowerCase() === title.toLowerCase());
     const nextEntry = existing
-      ? { ...existing, title, prompt: trimmedPrompt, updatedAt: now }
-      : { id: `prompt-${now}-${Math.random().toString(36).slice(2, 8)}`, title, prompt: trimmedPrompt, createdAt: now, updatedAt: now };
+      ? {
+          ...existing,
+          title,
+          version,
+          prompt: trimmedPrompt,
+          providerId: selectedProviderId,
+          providerLabel: providerMeta.label,
+          modelId: providerConfig?.modelId || '',
+          updatedAt: now,
+        }
+      : {
+          id: `prompt-${now}-${Math.random().toString(36).slice(2, 8)}`,
+          title,
+          version,
+          prompt: trimmedPrompt,
+          providerId: selectedProviderId,
+          providerLabel: providerMeta.label,
+          modelId: providerConfig?.modelId || '',
+          createdAt: now,
+          updatedAt: now,
+        };
     const nextPrompts = existing
       ? savedPrompts.map((entry) => entry.id === existing.id ? nextEntry : entry)
       : [nextEntry, ...savedPrompts].slice(0, 24);
     await saveLlmSettings({ savedPrompts: nextPrompts });
     setSavedPromptTitle(title);
-  }, [promptDraft, savedPromptTitle, savedPrompts, saveLlmSettings]);
+    setSavedPromptVersion(version);
+  }, [promptDraft, providerConfig?.modelId, providerMeta.label, savedPromptTitle, savedPromptVersion, savedPrompts, saveLlmSettings, selectedProviderId]);
 
   const onDeleteSavedPrompt = useCallback(async (promptId) => {
     const nextPrompts = savedPrompts.filter((entry) => entry.id !== promptId);
     await saveLlmSettings({ savedPrompts: nextPrompts });
   }, [savedPrompts, saveLlmSettings]);
 
-  const onLoadSavedPrompt = useCallback((entry) => {
+  const onLoadSavedPrompt = useCallback(async (entry) => {
     setPromptDraft(entry?.prompt || '');
     setSavedPromptTitle(entry?.title || derivePromptTitle(entry?.prompt || ''));
+    setSavedPromptVersion(entry?.version || 'v1');
+    if (entry?.providerId) {
+      await saveLlmSettings({
+        selectedProviderId: entry.providerId,
+        providers: {
+          [entry.providerId]: {
+            modelId: entry?.modelId || '',
+          },
+        },
+      });
+    }
     setPromptTestResult(null);
     setComparisonResult(null);
     setPromptTesterOpen(true);
-  }, []);
+  }, [saveLlmSettings]);
 
   const onLoadHistoryPrompt = useCallback((entry) => {
     setPromptDraft(entry?.prompt || '');
     setSavedPromptTitle(entry?.title || derivePromptTitle(entry?.prompt || ''));
+    setSavedPromptVersion(entry?.version || 'v1');
     if (entry?.modelId) setComparisonModelId(entry.modelId);
     setPromptTestResult(entry?.ok
       ? {
@@ -1388,6 +1598,93 @@ export default function LLMProviderControls({
     setSessionPromptRuns([]);
     await saveLlmSettings({ promptTestHistory: [] });
   }, [saveLlmSettings]);
+
+  const saveFeatureBindings = useCallback(async (nextBindings) => {
+    await saveLlmSettings({ featureBindings: nextBindings });
+  }, [saveLlmSettings]);
+
+  const onAddFeatureBinding = useCallback(async () => {
+    const featureName = String(featureDraft.featureName || '').trim();
+    if (!featureName) return;
+    const providerId = featureDraft.providerId || selectedProviderId;
+    const nextEntry = {
+      id: `binding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      featureName,
+      bindingType: featureDraft.bindingType || 'manual',
+      providerId,
+      providerLabel: providerLabelForId(providerId),
+      modelId: String(featureDraft.modelId || '').trim(),
+      enabled: true,
+      notes: String(featureDraft.notes || '').trim(),
+      source: 'manual',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await saveFeatureBindings([nextEntry, ...featureBindings].slice(0, 24));
+    setFeatureDraft({
+      featureName: '',
+      bindingType: 'manual',
+      providerId: selectedProviderId,
+      modelId: providerConfig?.modelId || '',
+      notes: '',
+    });
+  }, [featureBindings, featureDraft, providerConfig?.modelId, saveFeatureBindings, selectedProviderId]);
+
+  const onUpdateFeatureBinding = useCallback(async (bindingId, patch) => {
+    const nextBindings = featureBindings.map((entry) => {
+      if (entry.id !== bindingId) return entry;
+      const nextEntry = { ...entry, ...patch, updatedAt: Date.now() };
+      if (Object.prototype.hasOwnProperty.call(patch, 'providerId')) {
+        nextEntry.providerLabel = providerLabelForId(patch.providerId);
+      }
+      return nextEntry;
+    });
+    await saveFeatureBindings(nextBindings);
+  }, [featureBindings, saveFeatureBindings]);
+
+  const onDeleteFeatureBinding = useCallback(async (bindingId) => {
+    await saveFeatureBindings(featureBindings.filter((entry) => entry.id !== bindingId));
+  }, [featureBindings, saveFeatureBindings]);
+
+  const onImportDetectedFeatureBinding = useCallback(async (suggestion) => {
+    const nextEntry = {
+      id: `binding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      detectorId: suggestion.detectorId,
+      sourceFile: suggestion.sourceFile,
+      featureName: suggestion.label,
+      bindingType: suggestion.bindingType || 'manual',
+      providerId: selectedProviderId,
+      providerLabel: providerMeta.label,
+      modelId: providerConfig?.modelId || '',
+      enabled: true,
+      notes: `Imported from workspace signal: ${suggestion.sourceFile}`,
+      source: 'workspace',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await saveFeatureBindings([nextEntry, ...featureBindings].slice(0, 24));
+  }, [featureBindings, providerConfig?.modelId, providerMeta.label, saveFeatureBindings, selectedProviderId]);
+
+  const onImportAllDetectedFeatureBindings = useCallback(async () => {
+    if (featureBindingSuggestions.length === 0) return;
+    const timestamp = Date.now();
+    const importedEntries = featureBindingSuggestions.map((suggestion, index) => ({
+      id: `binding-${timestamp}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      detectorId: suggestion.detectorId,
+      sourceFile: suggestion.sourceFile,
+      featureName: suggestion.label,
+      bindingType: suggestion.bindingType || 'manual',
+      providerId: selectedProviderId,
+      providerLabel: providerMeta.label,
+      modelId: providerConfig?.modelId || '',
+      enabled: true,
+      notes: `Imported from workspace signal: ${suggestion.sourceFile}`,
+      source: 'workspace',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+    await saveFeatureBindings([...importedEntries, ...featureBindings].slice(0, 24));
+  }, [featureBindingSuggestions, featureBindings, providerConfig?.modelId, providerMeta.label, saveFeatureBindings, selectedProviderId]);
 
   const appendEvalHistoryEntry = useCallback(async (entry) => {
     await saveLlmSettings({
@@ -1508,6 +1805,8 @@ export default function LLMProviderControls({
           ...entry,
           status: evaluation.status,
           rationale: evaluation.rationale,
+          reviewNote: '',
+          escalated: false,
           outputText: result?.outputText || '',
           error: result?.error || '',
           usage: result?.usage || null,
@@ -1542,6 +1841,10 @@ export default function LLMProviderControls({
         ...summaryStats,
         totalTokens: summaryStats.totalTokens + caseResults.reduce((sum, entry) => sum + (entry?.judgeUsage?.total_tokens || 0), 0),
         estimatedCost: summaryStats.estimatedCost + caseResults.reduce((sum, entry) => sum + (typeof entry?.judgeEstimatedCost === 'number' ? entry.judgeEstimatedCost : 0), 0),
+        gateThreshold: Number(runtime.evalGateMinPassRate) || 0,
+        gatePassRate: summaryStats.totalCases ? (summaryStats.passCount / summaryStats.totalCases) : null,
+        gatePassed: summaryStats.totalCases ? ((summaryStats.passCount / summaryStats.totalCases) >= (Number(runtime.evalGateMinPassRate) || 0)) : null,
+        gateEnforced: !!runtime.requireEvalGatePass,
         cases: caseResults,
         saved: false,
       };
@@ -1549,7 +1852,7 @@ export default function LLMProviderControls({
     } finally {
       setEvalRunRunning(false);
     }
-  }, [evalMode, evalRunDraft, invokePromptTest, judgeModelId, providerConfig?.modelId, providerMeta.label, selectedProviderId]);
+  }, [evalMode, evalRunDraft, invokePromptTest, judgeModelId, providerConfig?.modelId, providerMeta.label, runtime.evalGateMinPassRate, runtime.requireEvalGatePass, selectedProviderId]);
 
   const onReviewEvalCase = useCallback((caseId, nextStatus) => {
     setEvalRunResult((currentValue) => {
@@ -1559,11 +1862,41 @@ export default function LLMProviderControls({
       return {
         ...currentValue,
         ...summaryStats,
+        gatePassRate: summaryStats.totalCases ? (summaryStats.passCount / summaryStats.totalCases) : null,
+        gatePassed: summaryStats.totalCases ? ((summaryStats.passCount / summaryStats.totalCases) >= (Number(runtime.evalGateMinPassRate) || 0)) : null,
+        cases: nextCases,
+        saved: false,
+      };
+    });
+  }, [runtime.evalGateMinPassRate]);
+
+  const onCaseNoteChange = useCallback((caseId, nextNote) => {
+    setEvalRunResult((currentValue) => {
+      if (!currentValue) return currentValue;
+      const nextCases = currentValue.cases.map((entry) => entry.id === caseId ? { ...entry, reviewNote: nextNote } : entry);
+      return {
+        ...currentValue,
         cases: nextCases,
         saved: false,
       };
     });
   }, []);
+
+  const onToggleCaseEscalation = useCallback((caseId) => {
+    setEvalRunResult((currentValue) => {
+      if (!currentValue) return currentValue;
+      const nextCases = currentValue.cases.map((entry) => entry.id === caseId ? { ...entry, escalated: !entry.escalated } : entry);
+      const summaryStats = computeEvalSummary(nextCases);
+      return {
+        ...currentValue,
+        ...summaryStats,
+        gatePassRate: summaryStats.totalCases ? (summaryStats.passCount / summaryStats.totalCases) : null,
+        gatePassed: summaryStats.totalCases ? ((summaryStats.passCount / summaryStats.totalCases) >= (Number(runtime.evalGateMinPassRate) || 0)) : null,
+        cases: nextCases,
+        saved: false,
+      };
+    });
+  }, [runtime.evalGateMinPassRate]);
 
   const onSaveEvalRun = useCallback(async () => {
     if (!evalRunResult) return;
@@ -1582,9 +1915,14 @@ export default function LLMProviderControls({
       passCount: evalRunResult.passCount,
       failCount: evalRunResult.failCount,
       reviewCount: evalRunResult.reviewCount,
+      escalatedCount: evalRunResult.escalatedCount || 0,
       totalTokens: evalRunResult.totalTokens,
       estimatedCost: evalRunResult.estimatedCost,
       averageLatencyMs: evalRunResult.averageLatencyMs,
+      gateThreshold: evalRunResult.gateThreshold,
+      gatePassRate: evalRunResult.gatePassRate,
+      gatePassed: evalRunResult.gatePassed,
+      gateEnforced: evalRunResult.gateEnforced,
     };
     await appendEvalHistoryEntry(savedEntry);
     setEvalRunResult((currentValue) => currentValue ? { ...currentValue, saved: true } : currentValue);
@@ -1628,10 +1966,21 @@ export default function LLMProviderControls({
 
   if (loading) return null;
 
+  const sectionTitle = showProvider
+    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Cpu size={16} /> Provider Settings</span>
+    : showRuntime
+      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw size={16} /> Runtime and Policy</span>
+      : showBindings
+        ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={16} /> Feature Bindings</span>
+        : showWorkflows
+          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><TestTube2 size={16} /> Prompt and Eval Workflows</span>
+          : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Cpu size={16} /> Operations Overview</span>;
+
   return (
     <>
-      <Section title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Cpu size={16} /> Provider Settings</span>}>
+      <Section title={sectionTitle}>
         <div style={{ display: 'grid', gap: 14 }}>
+          {(showProvider) && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Provider</div>
@@ -1648,8 +1997,9 @@ export default function LLMProviderControls({
               <input type="text" value={providerConfig?.baseUrl || ''} onChange={(event) => onProviderFieldChange('baseUrl', event.target.value)} style={inputStyle} placeholder="https://api.openai.com/v1" />
             </div>
           </div>
+          )}
 
-          {(selectedProviderId === 'openai' || selectedProviderId === 'azure-openai') && (
+          {showProvider && (selectedProviderId === 'openai' || selectedProviderId === 'azure-openai') && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
               {selectedProviderId === 'openai' ? (
                 <>
@@ -1665,6 +2015,7 @@ export default function LLMProviderControls({
             </div>
           )}
 
+          {showProvider && (
           <div style={cardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
               <KeyRound size={14} color={T.color} />
@@ -1684,14 +2035,18 @@ export default function LLMProviderControls({
               </div>
             </div>
           </div>
+          )}
 
+          {(showOverview || showWorkflows || showProvider) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {providerMeta.hasCatalog && <button type="button" onClick={() => { setModelPickerTarget('primary'); setModelPickerOpen(true); }} style={actionButtonStyle}><Sparkles size={13} />Pick model</button>}
             <button type="button" onClick={onTestConnection} style={positiveButtonStyle} disabled={testingConnection}><TestTube2 size={13} />{testingConnection ? 'Testing…' : 'Test connection'}</button>
             <button type="button" onClick={() => setPromptTesterOpen(true)} style={actionButtonStyle}><Sparkles size={13} />Prompt tester</button>
             <button type="button" onClick={onOpenEvalRunner} style={actionButtonStyle}><TestTube2 size={13} />Eval runner</button>
           </div>
+          )}
 
+          {(showOverview || showWorkflows || showProvider) && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
             <div style={cardStyle}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Selected Model</div>
@@ -1722,6 +2077,19 @@ export default function LLMProviderControls({
                     {lastValidation.validatedModel && <SmallPill>{lastValidation.validatedModel}</SmallPill>}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{lastValidation.message}</div>
+                  {lastValidation.capabilities && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      <SmallPill tone={lastValidation.capabilities.structuredOutputs ? 'good' : 'warn'}>
+                        {lastValidation.capabilities.structuredOutputs ? 'structured outputs' : 'no structured outputs'}
+                      </SmallPill>
+                      <SmallPill tone={lastValidation.capabilities.tools ? 'good' : 'warn'}>
+                        {lastValidation.capabilities.tools ? 'tools support' : 'no tools support'}
+                      </SmallPill>
+                      <SmallPill tone={lastValidation.capabilities.promptCaching ? 'good' : 'warn'}>
+                        {lastValidation.capabilities.promptCaching ? 'prompt caching' : 'no prompt caching'}
+                      </SmallPill>
+                    </div>
+                  )}
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Last checked {new Date(lastValidation.checkedAt).toLocaleString()}</div>
                 </div>
               ) : (
@@ -1729,7 +2097,58 @@ export default function LLMProviderControls({
               )}
             </div>
           </div>
+          )}
 
+          {(showOverview || showWorkflows) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Saved Prompts</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{savedPrompts.length}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 8 }}>
+                Reusable prompt entries saved inside Launchline.
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Prompt Test Runs</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{promptTestHistory.length}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 8 }}>
+                Recent prompt tests captured in Launchline history.
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Eval Runs</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{evalRunHistory.length}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 8 }}>
+                Saved eval summaries captured from the manual eval runner.
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Session Totals</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{sessionSummary.runCount}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 8 }}>
+                Prompt runs captured during the current Launchline session.
+              </div>
+            </div>
+          </div>
+          )}
+
+          {showWorkflows && (
+          <div style={cardStyle}>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Workflow surfaces</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                Use the prompt tester to run direct prompts and comparisons with the current provider settings. Use the eval runner to load detected datasets, choose an evaluation mode, review case outcomes, and save the run into eval history.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <SmallPill tone={promptAssetFiles.length > 0 ? 'good' : 'warn'}>{promptAssetFiles.length > 0 ? `${promptAssetFiles.length} prompt assets available` : 'no prompt assets detected'}</SmallPill>
+                <SmallPill tone={evalAssetFiles.length > 0 ? 'good' : 'warn'}>{evalAssetFiles.length > 0 ? `${evalAssetFiles.length} eval datasets available` : 'no eval datasets detected'}</SmallPill>
+                <SmallPill tone={sessionSummary.runCount > 0 ? 'good' : 'warn'}>{sessionSummary.runCount > 0 ? `${sessionSummary.runCount} runs this session` : 'no session runs yet'}</SmallPill>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {showRuntime && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <div style={cardStyle}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Runtime Behavior</div>
@@ -1755,7 +2174,217 @@ export default function LLMProviderControls({
                 <input type="text" value={runtime.fallbackModelId} onChange={(event) => onRuntimeFieldChange('fallbackModelId', event.target.value)} style={inputStyle} placeholder="Optional fallback model id" />
               </div>
             </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Budget Guardrail</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <input type="number" min="0" step="0.1" value={runtime.sessionBudgetUsd} onChange={(event) => onRuntimeFieldChange('sessionBudgetUsd', Number(event.target.value))} style={inputStyle} />
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  Launchline compares prompt-test session cost against this threshold and warns when the current session goes over budget.
+                </div>
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, marginBottom: 8 }}>Eval Gate</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <input type="number" min="0" max="1" step="0.05" value={runtime.evalGateMinPassRate} onChange={(event) => onRuntimeFieldChange('evalGateMinPassRate', Number(event.target.value))} style={inputStyle} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <input type="checkbox" checked={!!runtime.requireEvalGatePass} onChange={(event) => onRuntimeFieldChange('requireEvalGatePass', event.target.checked)} />
+                  Require the eval gate to pass before a run can be marked ready
+                </label>
+              </div>
+            </div>
           </div>
+          )}
+
+          {showBindings && (
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1 }}>Feature Bindings Editor</div>
+              <SmallPill tone="good">linked</SmallPill>
+              <SmallPill>{`${featureBindings.length} mapped`}</SmallPill>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 12 }}>
+              Capture which product features rely on LLM behavior, import detected workspace signals into managed bindings, and keep provider/model assignments explicit for each mapped capability.
+            </div>
+            <div style={{ display: 'grid', gap: 12 }}>
+              {featureBindingSuggestions.length > 0 && (
+                <div style={{ ...cardStyle, background: 'rgba(255,255,255,0.02)', display: 'grid', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: `${T.r}0.55)`, flex: 1 }}>
+                      Detected Workspace Bindings
+                    </div>
+                    <SmallPill>{`${featureBindingSuggestions.length} ready to import`}</SmallPill>
+                    <button type="button" onClick={onImportAllDetectedFeatureBindings} style={actionButtonStyle}>
+                      <Sparkles size={13} />
+                      Import all
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {featureBindingSuggestions.map((entry) => (
+                      <div
+                        key={`${entry.detectorId}-${entry.sourceFile}`}
+                        style={{
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 10,
+                          padding: '10px 12px',
+                          background: 'rgba(255,255,255,0.02)',
+                          display: 'grid',
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1 }}>{entry.label}</div>
+                          <SmallPill>{entry.bindingType}</SmallPill>
+                          <button type="button" onClick={() => onImportDetectedFeatureBinding(entry)} style={secondaryButtonStyle}>
+                            <Sparkles size={13} />
+                            Import
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          <SmallPill tone="good">workspace signal</SmallPill>
+                          <span style={{ minWidth: 0, flex: 1 }}>
+                            <SmallPill>{entry.sourceFile}</SmallPill>
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.1fr) 160px 160px 160px minmax(0, 1fr) auto', gap: 8, alignItems: 'start' }}>
+                <input
+                  type="text"
+                  value={featureDraft.featureName}
+                  onChange={(event) => setFeatureDraft((current) => ({ ...current, featureName: event.target.value }))}
+                  placeholder="Feature name"
+                  style={inputStyle}
+                />
+                <select
+                  value={featureDraft.bindingType}
+                  onChange={(event) => setFeatureDraft((current) => ({ ...current, bindingType: event.target.value }))}
+                  style={{ ...inputStyle, cursor: 'pointer' }}
+                >
+                  <option value="manual">Manual</option>
+                  <option value="generation">Generation</option>
+                  <option value="classification">Classification</option>
+                  <option value="retrieval">Retrieval</option>
+                  <option value="agent">Agent / Tools</option>
+                  <option value="evaluation">Evaluation</option>
+                </select>
+                <select
+                  value={featureDraft.providerId}
+                  onChange={(event) => {
+                    const nextProviderId = event.target.value;
+                    const nextProviderConfig = providerFromSettings(currentSettings, nextProviderId);
+                    setFeatureDraft((current) => ({
+                      ...current,
+                      providerId: nextProviderId,
+                      modelId: current.modelId || nextProviderConfig?.modelId || '',
+                    }));
+                  }}
+                  style={{ ...inputStyle, cursor: 'pointer' }}
+                >
+                  {providerOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={featureDraft.modelId}
+                  onChange={(event) => setFeatureDraft((current) => ({ ...current, modelId: event.target.value }))}
+                  placeholder="Model id"
+                  style={inputStyle}
+                />
+                <input
+                  type="text"
+                  value={featureDraft.notes}
+                  onChange={(event) => setFeatureDraft((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="Short notes"
+                  style={inputStyle}
+                />
+                <button type="button" onClick={onAddFeatureBinding} style={actionButtonStyle} disabled={!featureDraft.featureName.trim()}>
+                  <Sparkles size={13} />
+                  Add binding
+                </button>
+              </div>
+
+              {featureBindings.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  No feature bindings have been mapped yet. Add a feature here to start documenting which LLM-backed capabilities exist in this workspace or product.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {featureBindings.map((entry) => (
+                    <div key={entry.id} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: '10px 12px', background: 'rgba(255,255,255,0.02)', display: 'grid', gap: 10 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1.1fr) 160px 160px 160px 120px auto', gap: 8, alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          value={entry.featureName || ''}
+                          onChange={(event) => onUpdateFeatureBinding(entry.id, { featureName: event.target.value })}
+                          style={inputStyle}
+                        />
+                        <select
+                          value={entry.bindingType || 'manual'}
+                          onChange={(event) => onUpdateFeatureBinding(entry.id, { bindingType: event.target.value })}
+                          style={{ ...inputStyle, cursor: 'pointer' }}
+                        >
+                          <option value="manual">Manual</option>
+                          <option value="generation">Generation</option>
+                          <option value="classification">Classification</option>
+                          <option value="retrieval">Retrieval</option>
+                          <option value="agent">Agent / Tools</option>
+                          <option value="evaluation">Evaluation</option>
+                        </select>
+                        <select
+                          value={entry.providerId || selectedProviderId}
+                          onChange={(event) => onUpdateFeatureBinding(entry.id, { providerId: event.target.value })}
+                          style={{ ...inputStyle, cursor: 'pointer' }}
+                        >
+                          {providerOptions.map((option) => (
+                            <option key={option.id} value={option.id}>{option.label}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={entry.modelId || ''}
+                          onChange={(event) => onUpdateFeatureBinding(entry.id, { modelId: event.target.value })}
+                          style={inputStyle}
+                          placeholder="Model id"
+                        />
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          <input
+                            type="checkbox"
+                            checked={entry.enabled !== false}
+                            onChange={(event) => onUpdateFeatureBinding(entry.id, { enabled: event.target.checked })}
+                          />
+                          Enabled
+                        </label>
+                        <button type="button" onClick={() => onDeleteFeatureBinding(entry.id)} style={secondaryButtonStyle}>Delete</button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '240px minmax(0, 1fr)', gap: 8, alignItems: 'start' }}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <SmallPill tone="good">{entry.providerLabel || providerLabelForId(entry.providerId) || providerMeta.label}</SmallPill>
+                          <SmallPill>{entry.bindingType || 'manual'}</SmallPill>
+                          <SmallPill tone={entry.source === 'workspace' ? 'good' : 'default'}>
+                            {entry.source === 'workspace' ? 'workspace imported' : 'manual'}
+                          </SmallPill>
+                          {entry.sourceFile && <SmallPill>{entry.sourceFile}</SmallPill>}
+                        </div>
+                        <textarea
+                          value={entry.notes || ''}
+                          onChange={(event) => onUpdateFeatureBinding(entry.id, { notes: event.target.value })}
+                          placeholder="Notes about how this feature uses LLMs"
+                          style={{ ...inputStyle, minHeight: 72, resize: 'vertical', lineHeight: 1.5 }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          )}
         </div>
       </Section>
 
@@ -1783,10 +2412,13 @@ export default function LLMProviderControls({
           providerConfig={providerConfig}
           runtime={runtime}
           sessionSummary={sessionSummary}
+          sessionBudgetUsd={runtime.sessionBudgetUsd}
           promptDraft={promptDraft}
           onPromptDraftChange={setPromptDraft}
           savedPromptTitle={savedPromptTitle}
           onSavedPromptTitleChange={setSavedPromptTitle}
+          savedPromptVersion={savedPromptVersion}
+          onSavedPromptVersionChange={setSavedPromptVersion}
           savedPrompts={savedPrompts}
           onSavePrompt={onSaveReusablePrompt}
           onLoadSavedPrompt={onLoadSavedPrompt}
@@ -1823,6 +2455,7 @@ export default function LLMProviderControls({
           evalAssetFiles={evalAssetFiles}
           providerLabel={providerMeta.label}
           providerConfig={providerConfig}
+          runtime={runtime}
           evalRunHistory={evalRunHistory}
           evalMode={evalMode}
           onEvalModeChange={setEvalMode}
@@ -1834,6 +2467,8 @@ export default function LLMProviderControls({
           }}
           canPickCatalogModel={providerHasModelCatalog(selectedProviderId)}
           onReviewCase={onReviewEvalCase}
+          onCaseNoteChange={onCaseNoteChange}
+          onToggleCaseEscalation={onToggleCaseEscalation}
           onSaveRun={onSaveEvalRun}
           onLoadEvalAsset={loadEvalAsset}
           loading={evalRunLoading}
